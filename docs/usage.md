@@ -53,8 +53,8 @@ cargo uninstall mm
 `mm` commits immediately, so preview the message first when you are unsure:
 
 ```sh
-mm --print   # generate and print the message only
-mm           # generate and commit
+mm -p # generate and print the message only
+mm # generate and commit
 ```
 
 ## Options
@@ -124,13 +124,13 @@ mm --config path/to/commitlint.config.js --print
 ## Examples
 
 ```sh
-mm --print                    # preview without committing
-mm --add                      # include untracked files, then commit
-mm --staged                   # commit only what is already staged
-mm --edit                     # review the message in an editor
-mm --no-verify                # bypass Git hooks
+mm -p # preview without committing
+mm -a # include untracked files, then commit
+mm -s # commit only what is already staged
+mm -e # review the message in an editor
+mm --no-verify # bypass Git hooks
 mm -m 'JIRA-1 fix: keep this' # keep an existing prefix/description
-mm -v --print                 # explain what mm is doing on stderr
+mm -v --print # explain what mm is doing on stderr
 ```
 
 ## Output and exit status
@@ -143,21 +143,21 @@ mm -v --print                 # explain what mm is doing on stderr
 
 ## Troubleshooting
 
-**`Unable to generate message as no changes files can be seen`**
+`Unable to generate message as no changes files can be seen`
 Nothing is staged and there are no tracked changes. Stage files with `git add`,
 or use `mm --add` to include untracked files.
 
-**`not a git repository`**
+`not a git repository`
 Run `mm` inside a Git work tree.
 
-**A JavaScript/TypeScript config is ignored or warns about `extends`**
+A JavaScript/TypeScript config is ignored or warns about `extends`
 Install Node.js, and install `@commitlint/load` in the project that owns the
 config if you use presets.
 
-**`mm: command not found`**
+`mm: command not found`
 Check that `~/.cargo/bin` is in `PATH`, then start a new zsh session or run
 `rehash`.
 
-**An old `ac` command still exists**
+An old `ac` command still exists
 This tool was renamed to `mm`. Reinstall with the command above; any previously
 installed `ac` binary is separate and must be removed manually.
