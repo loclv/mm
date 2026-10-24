@@ -150,3 +150,7 @@ on purpose:
   unicode in file names do not need escaping.
 - A repository without commits yet is supported by diffing against the empty
   tree.
+
+## License
+
+MIT
