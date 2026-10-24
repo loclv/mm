@@ -141,11 +141,15 @@ mod tests {
     fn describes_one_change() {
         assert_eq!(
             one_change(&change('M', "src/main.rs", "")).unwrap(),
-            "update main.rs"
+            "update src/main.rs"
         );
         assert_eq!(
             one_change(&change('A', "src/new.rs", "")).unwrap(),
-            "create new.rs"
+            "create src/new.rs"
+        );
+        assert_eq!(
+            one_change(&change('A', "docs/dev.md", "")).unwrap(),
+            "create docs/dev.md"
         );
         assert_eq!(one_change(&change('D', "TODO", "")).unwrap(), "delete TODO");
     }
@@ -177,7 +181,10 @@ mod tests {
             change('M', "src/lib.rs", ""),
         ];
 
-        assert_eq!(named_files_desc(&changes), "update main.rs and lib.rs");
+        assert_eq!(
+            named_files_desc(&changes),
+            "update src/main.rs and src/lib.rs"
+        );
     }
 
     #[test]

@@ -325,6 +325,8 @@ mod tests {
     #[test]
     fn formats_one_change() {
         assert_eq!(single('A', "foo.txt"), "feat: create foo.txt");
+        assert_eq!(single('A', "docs/dev.md"), "docs: create docs/dev.md");
+        assert_eq!(single('M', "src/main.rs"), "chore: update src/main.rs");
         assert_eq!(single('M', "foo.txt"), "chore: update foo.txt");
         assert_eq!(single('M', "README.md"), "docs: update README.md");
         assert_eq!(single('D', "foo.txt"), "chore: delete foo.txt");
@@ -343,7 +345,7 @@ mod tests {
 
         assert_eq!(
             generate_msg(&changes, None).unwrap(),
-            "chore: update main.rs and lib.rs"
+            "chore: update src/main.rs and src/lib.rs"
         );
     }
 

@@ -192,7 +192,7 @@ fn commits_staged_changes() {
     let output = repo.mm(&[]);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(repo.latest_subject(), "feat: create lib.rs");
+    assert_eq!(repo.latest_subject(), "feat: create src/lib.rs");
     assert_eq!(repo.commit_count(), 2);
     assert_eq!(repo.git(&["status", "--porcelain"]), "");
 }
@@ -453,7 +453,7 @@ fn finds_mm_json_from_a_subdirectory() {
         .expect("run mm");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "create foo.txt");
+    assert_eq!(stdout(&output), "create src/deep/foo.txt");
 }
 
 #[test]
@@ -517,7 +517,7 @@ fn searches_parent_directories_for_configuration() {
         .expect("run mm");
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "FEAT: create foo.txt");
+    assert_eq!(stdout(&output), "FEAT: create src/deep/foo.txt");
 }
 
 #[test]
@@ -683,4 +683,30 @@ fn chat_does_not_load_project_configuration() {
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "Add chat import\n\nFinal answer.");
+}
+
+#[test]
+fn includes_relative_path_for_created_updated_and_deleted_files() {
+    let repo = Repo::new();
+    repo.write("docs/dev.md", "# Dev docs\n");
+    repo.git(&["add", "docs/dev.md"]);
+
+    let output = repo.mm(&["--print", "-m", "feat:"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "feat: create docs/dev.md");
+
+    repo.git(&["commit", "-m", "feat: create docs/dev.md"]);
+    repo.write("docs/dev.md", "# Dev docs\n\nUpdated.\n");
+    repo.git(&["add", "docs/dev.md"]);
+
+    let output = repo.mm(&["--print"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "docs: update docs/dev.md");
+
+    repo.git(&["commit", "-m", "docs: update docs/dev.md"]);
+    repo.git(&["rm", "docs/dev.md"]);
+
+    let output = repo.mm(&["--print"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "chore: delete docs/dev.md");
 }

@@ -5,9 +5,6 @@
 
 use crate::constants::ROOT;
 
-/// File name stems that are likely to appear more than once in a repository.
-const REPEAT_FILENAMES: [&str; 3] = ["readme", "index", "__init__.py"];
-
 /// Metadata about a path, derived from the string alone.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SplitPath {
@@ -101,23 +98,12 @@ pub fn quote_for_spaces(value: &str) -> String {
     }
 }
 
-/// Change a file path to a short, readable form.
+/// Format a file path for display in a commit message.
 ///
-/// Usually only the file name is kept. Names which tend to be repeated in a
-/// repository (such as `README.md`) keep their full path so that the message is
-/// unambiguous.
+/// The relative path is preserved, and paths containing spaces are wrapped in quotes.
 pub fn friendly_file(file_path: &str) -> String {
-    let split = SplitPath::new(file_path);
-    let lower_name = split.name.to_lowercase();
-
-    if REPEAT_FILENAMES
-        .iter()
-        .any(|prefix| lower_name.starts_with(prefix))
-    {
-        return quote_for_spaces(file_path);
-    }
-
-    quote_for_spaces(&split.name)
+    let clean = file_path.strip_prefix("./").unwrap_or(file_path);
+    quote_for_spaces(clean)
 }
 
 /// Join items with commas and an "and" before the last item.
@@ -191,11 +177,12 @@ mod tests {
     }
 
     #[test]
-    fn shortens_paths_where_possible() {
-        assert_eq!(friendly_file("src/main.rs"), "main.rs");
+    fn preserves_relative_paths() {
+        assert_eq!(friendly_file("src/main.rs"), "src/main.rs");
+        assert_eq!(friendly_file("docs/dev.md"), "docs/dev.md");
         assert_eq!(friendly_file("docs/README.md"), "docs/README.md");
         assert_eq!(friendly_file("README.md"), "README.md");
-        assert_eq!(friendly_file("a/foo bar.txt"), "'foo bar.txt'");
+        assert_eq!(friendly_file("a/foo bar.txt"), "'a/foo bar.txt'");
     }
 
     #[test]
@@ -211,10 +198,10 @@ mod tests {
 
     #[test]
     fn builds_human_lists() {
-        assert_eq!(human_list(&["src/main.rs".to_string()]), "main.rs");
+        assert_eq!(human_list(&["src/main.rs".to_string()]), "src/main.rs");
         assert_eq!(
             human_list(&["src/main.rs".to_string(), "src/lib.rs".to_string()]),
-            "main.rs and lib.rs"
+            "src/main.rs and src/lib.rs"
         );
     }
 

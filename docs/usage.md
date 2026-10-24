@@ -100,7 +100,7 @@ by default:
 - One file: `feat: create foo.rs`, `docs: update README.md`,
   `chore: delete old.txt`, or `chore: rename a.rs to b.rs`.
 - Two to four files: names are listed when the actions match, for example
-  `chore: update main.rs and lib.rs`; mixed actions fall back to counts.
+  `chore: update src/main.rs and src/lib.rs`; mixed actions fall back to counts.
 - Five or more files: counts are used, for example `chore: update 5 files`.
 - Types come from the path: docs, tests, CI, dependencies (`build(deps)`), build
   files, and configuration (`chore`).

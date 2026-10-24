@@ -1,16 +1,19 @@
 name,description,path
+agents,AGENTS.md,AGENTS.md
+changelog,,CHANGELOG.md
 cargo,,Cargo.lock
 cargo,,Cargo.toml
 readme,mm - Rust CLI,README.md
 codedb,,codedb.snapshot
 ,Docs,docs/
+dev,Development,docs/dev.md
 ref,References,docs/ref.md
-usage,CLI usage and install guide,docs/usage.md
+usage,mm CLI usage,docs/usage.md
 ,Src,src/
-chat,Copy a title and last assistant message from an OpenCode session.,src/chat.rs
+chat,Copy a commit message from an OpenCode chat session.,src/chat.rs
 cli,Command-line interface for `mm`.,src/cli.rs
-config,Read the project's `mm.json` configuration.,src/config.rs
 commitlint,Read a project's commitlint configuration.,src/commitlint.rs
+config,Read the project's `mm.json` configuration.,src/config.rs
 conventional,Conventional Commit type detection.,src/conventional.rs
 generate,Build the commit message from parsed file changes.,src/generate.rs
 git,Git integration.,src/git.rs
@@ -19,5 +22,6 @@ main,Entry point for the `mm` command.,src/main.rs
 message,Describe file changes in words.,src/message.rs
 paths,Path helpers.,src/paths.rs
 policy,Rules which shape a generated message.,src/policy.rs
+test,,test.sh
 ,Tests,tests/
 cli,End-to-end tests which run the real binary against temporary Git repos.,tests/cli.rs

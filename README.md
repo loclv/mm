@@ -8,8 +8,8 @@ mm
 ```
 
 By default there is no AI or network call. The message is built from the paths
-and change types that Git reports, using the same rules as the original
-TypeScript `gacm` CLI. If the project has a commitlint configuration, its type,
+and change types that Git reports.
+If the project has a commitlint configuration, its type,
 scope and length rules are applied too. Inside OpenCode, `--chat` can copy the
 current session title and last assistant message instead; see
 [Using an OpenCode chat](#using-an-opencode-chat).
@@ -148,7 +148,7 @@ mm --print
 
 - One file: `feat: create foo.rs`, `docs: update README.md`,
   `chore: delete old.txt`, `chore: rename a.rs to b.rs`
-- Two to four files: names are listed, e.g. `update main.rs and lib.rs`; mixed
+- Two to four files: names are listed, e.g. `update src/main.rs and src/lib.rs`; mixed
   actions fall back to counts
 - Five or more files: counts are used, e.g. `update 5 files`
 - The type is inferred from the changed paths. When changes disagree or a type
