@@ -1,0 +1,163 @@
+# mm CLI usage
+
+`mm` generates a Conventional Commit message from the changes Git reports, then
+commits them. It is deterministic and path-based: no AI, no network calls.
+
+## Requirements
+
+- macOS with zsh (the install steps below use Cargo)
+- Git
+- Rust 1.85+ (the crate uses edition 2024) when installing from source
+- Optional: Node.js for JavaScript/TypeScript commitlint configs
+
+## Install for macOS / zsh
+
+From the repository root:
+
+```sh
+cargo install --path . --force
+```
+
+Cargo installs the binary to `~/.cargo/bin/mm`. Confirm that Cargo's bin
+directory is on your zsh `PATH` and that the command resolves:
+
+```sh
+echo "$PATH" | tr ':' '\n' | grep -F "$HOME/.cargo/bin"
+command -v mm
+mm --version
+```
+
+If `mm` is not found, add this to `~/.zshrc` and start a new shell:
+
+```sh
+export PATH="$HOME/.cargo/bin:$PATH"
+```
+
+After reinstalling or replacing the binary, run `rehash` so zsh refreshes its
+command cache.
+
+To update after changing the source, reinstall:
+
+```sh
+cargo install --path . --force
+```
+
+To uninstall:
+
+```sh
+cargo uninstall mm
+```
+
+## Quick start
+
+`mm` commits immediately, so preview the message first when you are unsure:
+
+```sh
+mm --print   # generate and print the message only
+mm           # generate and commit
+```
+
+## Options
+
+| Option | Meaning |
+|---|---|
+| `-a`, `--add` | Stage all changes, including untracked files, then commit |
+| `-e`, `--edit` | Open the generated message in Git's editor before committing |
+| `-p`, `--print` | Print the message and exit; never commit |
+| `-d`, `--dry-run` | Alias for `--print` |
+| `-m`, `--message <MSG>` | Merge the generated description with an existing message |
+| `-c`, `--config <FILE>` | Use a specific commitlint config instead of searching |
+| `-s`, `--staged` | Only use staged changes; never fall back to unstaged changes |
+| `--no-verify` | Bypass Git commit hooks |
+| `-v`, `--verbose` | Print diagnostics to stderr |
+| `-n`, `--no-edit` | Compatibility flag; editing is already off by default |
+| `-h`, `--help` | Show help and exit |
+| `-V`, `--version` | Show the version and exit |
+
+## How changes are selected
+
+1. If anything is staged, only staged changes are used.
+2. If nothing is staged, tracked working-tree changes are committed with
+   `git commit -m MSG .`.
+3. Untracked files are ignored unless `--add` is passed.
+
+`--staged` disables the fallback in step 2, so an empty index is an error.
+
+`--print` never changes the repository. `--add` only stages for a real commit, so
+`mm --print --add` still excludes untracked files from the preview; if only
+untracked files exist, it reports that it cannot find changes.
+
+## Generated messages
+
+- One file: `feat: create foo.rs`, `docs: update README.md`,
+  `chore: delete old.txt`, or `chore: rename a.rs to b.rs`.
+- Two to four files: names are listed when the actions match, for example
+  `update main.rs and lib.rs`; mixed actions fall back to counts.
+- Five or more files: counts are used, for example `update 5 files`.
+- Types come from the path: docs, tests, CI, dependencies (`build(deps)`), build
+  files, and configuration (`chore`).
+- A new file with no other match is a `feat`.
+- Renames, moves, and deletions are `chore`.
+
+An existing type prefix supplied with `--message` wins over the generated type;
+an existing description is appended after the generated description.
+
+## commitlint configuration
+
+`mm` searches upward from the current directory, stopping at `$HOME`, and reads
+the same commitlint file names as cosmiconfig, including `package.json` and
+`package.yaml`. JSON and YAML are parsed natively. JavaScript and TypeScript
+configs are evaluated with `node`; `extends` presets additionally require
+`@commitlint/load` in the project.
+
+Applied rules are the ones that affect the generated header: type and scope
+enums/case, type/scope presence, type/header/subject length, and trailing full
+stops. Rules for bodies, footers, and trailers are not applied because `mm` only
+writes a one-line header.
+
+Use an explicit config with:
+
+```sh
+mm --config path/to/commitlint.config.js --print
+```
+
+## Examples
+
+```sh
+mm --print                    # preview without committing
+mm --add                      # include untracked files, then commit
+mm --staged                   # commit only what is already staged
+mm --edit                     # review the message in an editor
+mm --no-verify                # bypass Git hooks
+mm -m 'JIRA-1 fix: keep this' # keep an existing prefix/description
+mm -v --print                 # explain what mm is doing on stderr
+```
+
+## Output and exit status
+
+- The generated message goes to stdout.
+- Errors go to stderr as `Error: ...`.
+- Verbose diagnostics go to stderr with an `[mm]` prefix.
+- Exit status is `0` on success (including `--help`, `--version`, and
+  `--print`) and `1` on failure.
+
+## Troubleshooting
+
+**`Unable to generate message as no changes files can be seen`**
+Nothing is staged and there are no tracked changes. Stage files with `git add`,
+or use `mm --add` to include untracked files.
+
+**`not a git repository`**
+Run `mm` inside a Git work tree.
+
+**A JavaScript/TypeScript config is ignored or warns about `extends`**
+Install Node.js, and install `@commitlint/load` in the project that owns the
+config if you use presets.
+
+**`mm: command not found`**
+Check that `~/.cargo/bin` is in `PATH`, then start a new zsh session or run
+`rehash`.
+
+**An old `ac` command still exists**
+This tool was renamed to `mm`. Reinstall with the command above; any previously
+installed `ac` binary is separate and must be removed manually.

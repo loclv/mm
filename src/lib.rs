@@ -8,7 +8,7 @@
 //! - [`conventional`] picks the Conventional Commit type for a file.
 //! - [`message`] describes one file change or a group of changes.
 //! - [`generate`] assembles the final commit message.
-//! - [`cli`] implements the `ac` command-line interface.
+//! - [`cli`] implements the `mm` command-line interface.
 
 pub mod cli;
 pub mod commitlint;

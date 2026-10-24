@@ -1,6 +1,6 @@
-//! Command-line interface for `ac`.
+//! Command-line interface for `mm`.
 //!
-//! `ac` looks at staged changes (falling back to tracked worktree changes),
+//! `mm` looks at staged changes (falling back to tracked worktree changes),
 //! generates a Conventional Commit message, and commits. Use `--print` to only
 //! show the message.
 
@@ -41,12 +41,12 @@ pub struct Options {
     pub verbose: bool,
 }
 
-/// Help text shown by `ac --help`.
+/// Help text shown by `mm --help`.
 pub const HELP: &str = "\
-ac - commit with an automatically generated message
+mm - commit with an automatically generated message
 
 Usage:
-  ac [options]
+  mm [options]
 
 By default, staged changes are used. If nothing is staged, tracked changes in
 the working tree are committed instead (like `git commit .`). Untracked files
@@ -71,10 +71,10 @@ Options:
   -V, --version          Show the version and exit
 
 Examples:
-  ac                     Generate a message and commit
-  ac --print             Show the message without committing
-  ac --add               Include new files, then commit
-  ac -m 'JIRA-1: fix'    Keep the existing prefix/description
+  mm                     Generate a message and commit
+  mm --print             Show the message without committing
+  mm --add               Include new files, then commit
+  mm -m 'JIRA-1: fix'    Keep the existing prefix/description
 ";
 
 /// Parse arguments into a command.
@@ -142,7 +142,7 @@ pub fn run(args: &[String]) -> Result<(), String> {
             Ok(())
         }
         Command::Version => {
-            println!("ac {}", env!("CARGO_PKG_VERSION"));
+            println!("mm {}", env!("CARGO_PKG_VERSION"));
             Ok(())
         }
         Command::Run(options) => execute(&options),
@@ -154,7 +154,7 @@ pub fn execute(options: &Options) -> Result<(), String> {
     let git = Git::discover(options.verbose)?;
 
     if options.verbose {
-        eprintln!("[ac] repository: {}", git.root().display());
+        eprintln!("[mm] repository: {}", git.root().display());
     }
 
     if options.add && !options.print_only {
@@ -181,7 +181,7 @@ pub fn execute(options: &Options) -> Result<(), String> {
     }
 
     if options.verbose {
-        eprintln!("[ac] message: {message}");
+        eprintln!("[mm] message: {message}");
     }
 
     git.commit(&CommitOptions {
@@ -205,12 +205,12 @@ fn load_policy(options: &Options) -> Result<Policy, String> {
 
     if options.verbose {
         eprintln!(
-            "[ac] commitlint config: {} (loaded via {})",
+            "[mm] commitlint config: {} (loaded via {})",
             config.source.display(),
             config.via
         );
         if config.policy.is_empty() {
-            eprintln!("[ac] no generation rules found in commitlint config");
+            eprintln!("[mm] no generation rules found in commitlint config");
         }
     }
 

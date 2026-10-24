@@ -16,7 +16,7 @@ impl Repo {
     /// Create an empty repository with one initial commit.
     fn new() -> Self {
         let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("ac-test-{}-{unique}", std::process::id()));
+        let path = std::env::temp_dir().join(format!("mm-test-{}-{unique}", std::process::id()));
 
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create temp repo");
@@ -24,8 +24,8 @@ impl Repo {
         let repo = Self { path };
 
         repo.git(&["init", "-q"]);
-        repo.git(&["config", "user.email", "ac@example.com"]);
-        repo.git(&["config", "user.name", "AC Test"]);
+        repo.git(&["config", "user.email", "mm@example.com"]);
+        repo.git(&["config", "user.name", "MM Test"]);
         repo.git(&["config", "commit.gpgsign", "false"]);
 
         repo.write("README.md", "# test\n");
@@ -67,13 +67,13 @@ impl Repo {
         String::from_utf8_lossy(&output.stdout).trim().to_string()
     }
 
-    /// Run `ac` in the repository.
-    fn ac(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_ac"))
+    /// Run `mm` in the repository.
+    fn mm(&self, args: &[&str]) -> Output {
+        Command::new(env!("CARGO_BIN_EXE_mm"))
             .args(args)
             .current_dir(&self.path)
             .output()
-            .expect("run ac")
+            .expect("run mm")
     }
 
     /// Number of commits on the current branch.
@@ -109,7 +109,7 @@ fn prints_message_without_committing() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "feat: create foo.txt");
@@ -122,7 +122,7 @@ fn dry_run_is_an_alias_for_print() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--dry-run"]);
+    let output = repo.mm(&["--dry-run"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "feat: create foo.txt");
@@ -135,7 +135,7 @@ fn commits_staged_changes() {
     repo.write("src/lib.rs", "pub fn answer() -> u8 { 42 }\n");
     repo.git(&["add", "src/lib.rs"]);
 
-    let output = repo.ac(&[]);
+    let output = repo.mm(&[]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(repo.latest_subject(), "feat: create lib.rs");
@@ -148,7 +148,7 @@ fn falls_back_to_unstaged_tracked_changes() {
     let repo = Repo::new();
     repo.write("README.md", "# test\n\nMore docs.\n");
 
-    let output = repo.ac(&[]);
+    let output = repo.mm(&[]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(repo.latest_subject(), "docs: update README.md");
@@ -162,7 +162,7 @@ fn staged_changes_take_priority_over_unstaged_ones() {
     repo.git(&["add", "staged.txt"]);
     repo.write("README.md", "# test\n\nUnstaged docs.\n");
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "feat: create staged.txt");
@@ -173,7 +173,7 @@ fn untracked_files_are_ignored_without_add() {
     let repo = Repo::new();
     repo.write("notes.txt", "hello\n");
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("no changes files"));
@@ -184,7 +184,7 @@ fn add_includes_untracked_files() {
     let repo = Repo::new();
     repo.write("new.rs", "fn main() {}\n");
 
-    let output = repo.ac(&["--add"]);
+    let output = repo.mm(&["--add"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(repo.latest_subject(), "feat: create new.rs");
@@ -196,7 +196,7 @@ fn staged_only_refuses_to_fall_back() {
     let repo = Repo::new();
     repo.write("README.md", "# test\n\nchanged\n");
 
-    let output = repo.ac(&["--staged", "--print"]);
+    let output = repo.mm(&["--staged", "--print"]);
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("no changes files"));
@@ -206,7 +206,7 @@ fn staged_only_refuses_to_fall_back() {
 fn reports_when_there_is_nothing_to_do() {
     let repo = Repo::new();
 
-    let output = repo.ac(&[]);
+    let output = repo.mm(&[]);
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("Error: Unable to generate message"));
@@ -218,7 +218,7 @@ fn keeps_an_existing_prefix() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--print", "--message", "JIRA-1 fix: keep this"]);
+    let output = repo.mm(&["--print", "--message", "JIRA-1 fix: keep this"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "JIRA-1 fix: create foo.txt keep this");
@@ -226,10 +226,10 @@ fn keeps_an_existing_prefix() {
 
 #[test]
 fn shows_help() {
-    let output = Command::new(env!("CARGO_BIN_EXE_ac"))
+    let output = Command::new(env!("CARGO_BIN_EXE_mm"))
         .arg("--help")
         .output()
-        .expect("run ac");
+        .expect("run mm");
 
     assert!(output.status.success());
     assert!(stdout(&output).contains("Usage:"));
@@ -237,14 +237,14 @@ fn shows_help() {
 
 #[test]
 fn fails_outside_a_repository() {
-    let path = std::env::temp_dir().join(format!("ac-test-not-a-repo-{}", std::process::id()));
+    let path = std::env::temp_dir().join(format!("mm-test-not-a-repo-{}", std::process::id()));
     let _ = fs::remove_dir_all(&path);
     fs::create_dir_all(&path).unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_ac"))
+    let output = Command::new(env!("CARGO_BIN_EXE_mm"))
         .current_dir(&path)
         .output()
-        .expect("run ac");
+        .expect("run mm");
 
     let _ = fs::remove_dir_all(&path);
 
@@ -261,7 +261,7 @@ fn handles_renames_and_moves() {
     fs::create_dir_all(repo.path().join("new")).unwrap();
     repo.git(&["mv", "old/name.rs", "new/name.rs"]);
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "chore: move name.rs to new");
@@ -273,10 +273,10 @@ fn verbose_mode_reports_progress() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--print", "--verbose"]);
+    let output = repo.mm(&["--print", "--verbose"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stderr(&output).contains("[ac]"));
+    assert!(stderr(&output).contains("[mm]"));
 }
 
 #[test]
@@ -289,7 +289,7 @@ fn honours_a_custom_type_enum() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "chore: create foo.txt");
@@ -305,7 +305,7 @@ fn honours_yaml_configuration() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "FEAT: create foo.txt");
@@ -321,7 +321,7 @@ fn honours_a_package_json_field() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "wip: create foo.txt");
@@ -346,7 +346,7 @@ fn honours_header_max_length() {
         repo.git(&["add", name]);
     }
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "update 3 files");
@@ -362,7 +362,7 @@ fn drops_a_scope_which_is_not_allowed() {
     repo.write("package-lock.json", "{}\n");
     repo.git(&["add", "package-lock.json"]);
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "build: create package-lock.json");
@@ -378,7 +378,7 @@ fn accepts_an_explicit_config_path() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--print", "--config", "lint-rules.json"]);
+    let output = repo.mm(&["--print", "--config", "lint-rules.json"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "custom: create foo.txt");
@@ -394,11 +394,11 @@ fn searches_parent_directories_for_configuration() {
     repo.write("src/deep/foo.txt", "new\n");
     repo.git(&["add", "src/deep/foo.txt"]);
 
-    let output = Command::new(env!("CARGO_BIN_EXE_ac"))
+    let output = Command::new(env!("CARGO_BIN_EXE_mm"))
         .args(["--print"])
         .current_dir(repo.path().join("src/deep"))
         .output()
-        .expect("run ac");
+        .expect("run mm");
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "FEAT: create foo.txt");
@@ -418,7 +418,7 @@ fn loads_a_javascript_configuration_when_node_is_available() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--print"]);
+    let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "chore: create foo.txt");
@@ -430,7 +430,7 @@ fn reports_a_missing_explicit_configuration() {
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
-    let output = repo.ac(&["--print", "--config", "missing.json"]);
+    let output = repo.mm(&["--print", "--config", "missing.json"]);
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("commitlint config not found"));

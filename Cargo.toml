@@ -1,19 +1,19 @@
 [package]
-name = "auto-commit-msg"
+name = "mm"
 version = "0.1.0"
 edition = "2024"
 description = "Generate a Conventional Commit message from Git changes and commit it"
 license = "MIT"
 repository = "https://github.com/MichaelCurrin/auto-commit-msg"
 readme = "README.md"
-default-run = "ac"
+default-run = "mm"
 
 [[bin]]
-name = "ac"
+name = "mm"
 path = "src/main.rs"
 
 [lib]
-name = "auto_commit_msg"
+name = "mm"
 path = "src/lib.rs"
 
 [profile.release]

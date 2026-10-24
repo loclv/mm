@@ -1,9 +1,8 @@
 # AGENTS.md
 
-`ac` is a single-crate Rust CLI that generates a deterministic, path-based
+`mm` is a single-crate Rust CLI that generates a deterministic, path-based
 Conventional Commit message from Git changes and commits it. No AI or network
-calls; keep it that way. Package: `auto-commit-msg`; binary: `ac`; library:
-`auto_commit_msg`.
+calls; keep it that way. Package: `mm`; binary: `mm`; library: `mm`.
 
 ## Commands
 
@@ -12,7 +11,7 @@ Run from the repository root (this directory):
 - `./test.sh` — full gate: `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`, `cargo test`.
 - `cargo test --test cli <substring>` — one integration test, e.g. `cargo test --test cli commits_staged_changes`.
 - `cargo test --lib <substring>` — one unit test.
-- `cargo build --release` — binary at `target/release/ac`.
+- `cargo build --release` — binary at `target/release/mm`.
 
 Unit tests live in `#[cfg(test)]` modules beside the code; end-to-end tests in
 `tests/cli.rs` execute the real binary against temporary Git repositories.
@@ -26,6 +25,8 @@ Pipeline: `cli::run` → `Git::discover` → `Git::changes` → `commitlint::loa
   `Options`, a `parse_args` arm, `HELP`, and tests.
 - Change detection uses `git diff-index --name-status -z`; modules mirror the
   original TypeScript implementation (mapping table in README).
+- User-facing CLI reference is `docs/usage.md`; keep its option table and
+  behavior in sync with `HELP` in `src/cli.rs`.
 - `conventional.rs` picks types from paths, checking specific categories before
   general ones. `message.rs` owns wording, `policy.rs` translates commitlint
   rules, and `commitlint.rs` handles discovery/loading.
@@ -43,8 +44,8 @@ Pipeline: `cli::run` → `Git::discover` → `Git::changes` → `commitlint::loa
   subdirectory.
 - Integration tests need `git` on `PATH` and a writable temp directory.
 - Stale build artifacts: if the repo is moved, an existing `target/` can
-  retain a compiled `CARGO_BIN_EXE_ac` absolute path from the old location. The
-  entire `tests/cli.rs` suite then fails with `run ac: Os { code: 2, ... }`.
+  retain a compiled `CARGO_BIN_EXE_mm` absolute path from the old location. The
+  entire `tests/cli.rs` suite then fails with `run mm: Os { code: 2, ... }`.
   Fix with `cargo clean` (or `touch tests/cli.rs`) before rerunning.
 - Node is optional. JavaScript/TypeScript commitlint configs are evaluated with
   `node`, and `extends` needs `@commitlint/load` in the target project, otherwise
@@ -53,7 +54,7 @@ Pipeline: `cli::run` → `Git::discover` → `Git::changes` → `commitlint::loa
 - Commitlint discovery walks upward and stops at `$HOME`; JSON, YAML and
   `package.json`/`package.yaml` are parsed natively.
 - Output contract: generated message on stdout, errors as `Error: ...` on stderr,
-  verbose diagnostics as `[ac] ...` on stderr. `--print` stdout is asserted
+  verbose diagnostics as `[mm] ...` on stderr. `--print` stdout is asserted
   exactly by integration tests.
 
 ## Dependencies

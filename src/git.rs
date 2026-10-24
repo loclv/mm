@@ -248,7 +248,7 @@ impl Git {
     /// Print a message when verbose mode is enabled.
     fn debug(&self, message: &str) {
         if self.verbose {
-            eprintln!("[ac] {message}");
+            eprintln!("[mm] {message}");
         }
     }
 }

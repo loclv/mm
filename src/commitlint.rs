@@ -607,7 +607,7 @@ mod tests {
         fn new() -> Self {
             let unique = COUNTER.fetch_add(1, Ordering::Relaxed);
             let path =
-                std::env::temp_dir().join(format!("ac-commitlint-{}-{unique}", std::process::id()));
+                std::env::temp_dir().join(format!("mm-commitlint-{}-{unique}", std::process::id()));
 
             fs::create_dir_all(&path).unwrap();
 
