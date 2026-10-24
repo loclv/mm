@@ -24,7 +24,8 @@ Pipeline (path-based): `cli::run` → `Git::discover` → `Git::changes` →
 
 Pipeline (`--chat`): `cli::run` → `Git::discover` → `Git::changes` →
 `chat::load` → `ChatMessage::message` → `Git::commit`. Chat mode does not load
-`mm.json` or commitlint.
+`mm.json` or commitlint unless copying from chat fails, in which case it
+automatically falls back to the path-based pipeline.
 
 - `src/cli.rs` parses arguments by hand (no clap). A new option needs fields in
   `Options`, a `parse_args` arm, `HELP`, and tests.
@@ -40,16 +41,23 @@ Pipeline (`--chat`): `cli::run` → `Git::discover` → `Git::changes` →
 - `conventional.rs` picks types from paths, checking specific categories before
   general ones. `message.rs` owns wording, `policy.rs` translates commitlint
   rules, and `commitlint.rs` handles discovery/loading.
-- `chat.rs` shells out to `opencode session export <id>` and parses its JSON.
-  `--chat` uses the session title as the subject and copies the last assistant
-  message as the body, matching OpenCode's `/copy`; a completed compaction
-  summary wins when it is the last message. Only `text` parts are joined with
-  newlines; tool calls, reasoning and system messages are skipped.
-  `OPENCODE_SESSION_ID` selects the session, `--chat-session` overrides it, and
-  `--message` overrides the copied subject. If the title is absent or a
-  `New session ...` placeholder, the latest user prompt's first line is used,
-  then the first line of the copied message. A session with no copyable text is
-  an error.
+- `chat.rs` loads chat context from OpenCode or Antigravity.
+  - OpenCode: shells out to `opencode session export <id>` and parses its JSON.
+    `--chat` uses the session title as the subject and copies the last assistant
+    message as the body, matching OpenCode's `/copy`; a completed compaction
+    summary wins when it is the last message. Only `text` parts are joined with
+    newlines; tool calls, reasoning and system messages are skipped.
+    `OPENCODE_SESSION_ID` selects the session, `--chat-session` overrides it.
+  - Antigravity: parses JSON Lines transcripts from
+    `~/.gemini/antigravity-ide/brain/<id>/.system_generated/logs/transcript.jsonl`.
+    `--agy` / `--antigravity` forces Antigravity mode; `--agy-session` selects a
+    specific conversation ID or file path. Auto-detection prioritizes logs
+    matching the repository path. The subject is the first line of the latest user
+    request (from `<USER_REQUEST>`, stripped of `@` file mentions), falling back to
+    the first line of the assistant message. The body is the text content from the
+    last assistant message (`PLANNER_RESPONSE`).
+  - `--message` overrides the copied subject. A session with no copyable text is
+    an error.
 - `Policy` intentionally supports only rules that shape the single-line header
   (type/scope/length/full stop). Bodies, footers and trailers are never
   generated except in `--chat` mode, which copies the last assistant message and

@@ -34,9 +34,11 @@ pub struct Options {
     /// Existing message to merge with the generated one, or to use as the chat
     /// subject.
     pub message: Option<String>,
-    /// Copy the message from an OpenCode chat session.
+    /// Copy the message from an OpenCode or Antigravity chat session.
     pub chat: bool,
-    /// OpenCode session to copy; implies `chat`.
+    /// Force copying from Antigravity.
+    pub antigravity: bool,
+    /// Chat session or conversation ID to copy; implies `chat`.
     pub chat_session: Option<String>,
     /// Explicit commitlint configuration file.
     pub config: Option<PathBuf>,
@@ -67,8 +69,10 @@ Messages follow Conventional Commits by default. Add `mm.json` with
 {\"conventionalCommits\": false} to generate plain descriptions instead.
 
 Pass --chat to copy the title and last assistant message from the current
-OpenCode session instead; chat messages are not reshaped by commitlint. Use
---chat-session <ID> to select a different session.
+OpenCode or Antigravity session instead; chat messages are not reshaped by
+commitlint. If copying from chat fails, mm automatically falls back to
+auto commit message generation. Use --chat-session <ID> to select a different
+session, or --agy to copy from the latest Antigravity log.
 
 Options:
   -a, --add              Stage all changes, including untracked files, first
@@ -76,8 +80,10 @@ Options:
   -p, --print            Print the generated message and exit without committing
   -d, --dry-run          Alias for --print
   -m, --message <MSG>    Merge the generated description (or override a chat subject)
-      --chat             Copy the OpenCode chat title and last message
-      --chat-session <ID>  Use a specific OpenCode session (implies --chat)
+      --chat             Copy the chat title and last message (OpenCode or Antigravity)
+      --chat-session <ID>  Use a specific session ID or transcript path (implies --chat)
+      --agy, --antigravity Copy the Antigravity last log commit message (implies --chat)
+      --agy-session <ID>   Use a specific Antigravity conversation (implies --agy)
   -c, --config <FILE>    Use this commitlint configuration instead of searching
   -s, --staged           Only use staged changes; never fall back to unstaged
       --no-verify        Bypass Git commit hooks
@@ -91,6 +97,7 @@ Examples:
   mm --print             Show the message without committing
   mm --add               Include new files, then commit
   mm --chat --print      Preview the message copied from the current chat
+  mm --agy --print       Preview the message copied from Antigravity's last log
   mm -m 'JIRA-1: fix'    Keep the existing prefix/description
 ";
 
@@ -120,6 +127,19 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             }
             "-s" | "--staged" | "--staged-only" => options.staged_only = true,
             "--chat" | "--from-chat" => options.chat = true,
+            "--agy" | "--antigravity" => {
+                options.chat = true;
+                options.antigravity = true;
+            }
+            "--agy-session" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| format!("`{arg}` requires a value"))?;
+                options.chat = true;
+                options.antigravity = true;
+                options.chat_session = Some(value.clone());
+            }
             "--chat-session" => {
                 index += 1;
                 let value = args
@@ -142,6 +162,11 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             }
             _ if arg.starts_with("--config=") => {
                 options.config = Some(PathBuf::from(&arg["--config=".len()..]));
+            }
+            _ if arg.starts_with("--agy-session=") => {
+                options.chat = true;
+                options.antigravity = true;
+                options.chat_session = Some(arg["--agy-session=".len()..].to_string());
             }
             _ if arg.starts_with("--chat-session=") => {
                 options.chat = true;
@@ -201,51 +226,54 @@ pub fn execute(options: &Options) -> Result<(), String> {
     }
 
     let message = if options.chat {
-        let chat = chat::load(options.chat_session.as_deref(), options.verbose)?;
+        let chat_result = chat::load(
+            options.chat_session.as_deref(),
+            Some(&directory),
+            options.antigravity,
+            options.verbose,
+        );
 
-        if options.verbose {
-            eprintln!(
-                "[mm] chat: session {} ({})",
-                chat.session_id,
-                match chat.subject_source {
-                    chat::SubjectSource::Title => "using the session title",
-                    chat::SubjectSource::LatestPrompt => {
-                        "no session title; using the latest user prompt"
+        match chat_result {
+            Ok(chat) => {
+                let msg = chat.message(options.message.as_deref());
+                if msg.is_empty() {
+                    if options.verbose {
+                        eprintln!(
+                            "[mm] chat: message from session {} is empty; falling back to auto commit message",
+                            chat.session_id
+                        );
                     }
-                    chat::SubjectSource::LastMessage => {
-                        "no session title or user prompt; using the copied message"
+                    generate_auto_message(options, &directory, &changes.files)?
+                } else {
+                    if options.verbose {
+                        eprintln!(
+                            "[mm] chat: session {} ({})",
+                            chat.session_id,
+                            match chat.subject_source {
+                                chat::SubjectSource::Title => "using the session title",
+                                chat::SubjectSource::LatestPrompt => {
+                                    "no session title; using the latest user prompt"
+                                }
+                                chat::SubjectSource::LastMessage => {
+                                    "no session title or user prompt; using the copied message"
+                                }
+                            }
+                        );
                     }
+                    msg
                 }
-            );
-        }
-
-        chat.message(options.message.as_deref())
-    } else {
-        let settings = config::load(&directory)?;
-
-        if options.verbose {
-            match &settings.source {
-                Some(source) => eprintln!(
-                    "[mm] config: {} (conventional commits: {})",
-                    source.display(),
-                    if settings.conventional_commits {
-                        "enabled"
-                    } else {
-                        "disabled"
-                    }
-                ),
-                None => eprintln!("[mm] config: none (conventional commits: enabled)"),
+            }
+            Err(error) => {
+                if options.verbose {
+                    eprintln!(
+                        "[mm] chat: failed to copy log from AI Agent ({error}); falling back to auto commit message"
+                    );
+                }
+                generate_auto_message(options, &directory, &changes.files)?
             }
         }
-
-        let policy = load_policy(options, &directory)?;
-        let format = if settings.conventional_commits {
-            MessageFormat::Conventional
-        } else {
-            MessageFormat::Plain
-        };
-
-        generate_msg_with_policy(&changes.files, options.message.as_deref(), &policy, format)?
+    } else {
+        generate_auto_message(options, &directory, &changes.files)?
     };
 
     if message.is_empty() {
@@ -267,6 +295,39 @@ pub fn execute(options: &Options) -> Result<(), String> {
         edit: options.edit,
         no_verify: options.no_verify,
     })
+}
+
+/// Generate the deterministic, path-based commit message.
+fn generate_auto_message(
+    options: &Options,
+    directory: &Path,
+    files: &[crate::git::FileChange],
+) -> Result<String, String> {
+    let settings = config::load(directory)?;
+
+    if options.verbose {
+        match &settings.source {
+            Some(source) => eprintln!(
+                "[mm] config: {} (conventional commits: {})",
+                source.display(),
+                if settings.conventional_commits {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ),
+            None => eprintln!("[mm] config: none (conventional commits: enabled)"),
+        }
+    }
+
+    let policy = load_policy(options, directory)?;
+    let format = if settings.conventional_commits {
+        MessageFormat::Conventional
+    } else {
+        MessageFormat::Plain
+    };
+
+    generate_msg_with_policy(files, options.message.as_deref(), &policy, format)
 }
 
 /// Read the project's commitlint configuration, reporting any warnings.
@@ -337,6 +398,7 @@ mod tests {
                 print_only: true,
                 message: None,
                 chat: false,
+                antigravity: false,
                 chat_session: None,
                 config: None,
                 staged_only: true,
@@ -377,6 +439,24 @@ mod tests {
             })
         );
 
+        assert_eq!(
+            parse_args(&args(&["--agy"])).unwrap(),
+            Command::Run(Options {
+                chat: true,
+                antigravity: true,
+                ..Options::default()
+            })
+        );
+
+        assert_eq!(
+            parse_args(&args(&["--antigravity"])).unwrap(),
+            Command::Run(Options {
+                chat: true,
+                antigravity: true,
+                ..Options::default()
+            })
+        );
+
         let with_space = parse_args(&args(&["--chat-session", "ses_test"])).unwrap();
         let with_equals = parse_args(&args(&["--chat-session=ses_test"])).unwrap();
 
@@ -389,11 +469,26 @@ mod tests {
                 ..Options::default()
             })
         );
+
+        let agy_space = parse_args(&args(&["--agy-session", "conv_test"])).unwrap();
+        let agy_equals = parse_args(&args(&["--agy-session=conv_test"])).unwrap();
+
+        assert_eq!(agy_space, agy_equals);
+        assert_eq!(
+            agy_space,
+            Command::Run(Options {
+                chat: true,
+                antigravity: true,
+                chat_session: Some("conv_test".to_string()),
+                ..Options::default()
+            })
+        );
     }
 
     #[test]
     fn rejects_a_missing_chat_session() {
         assert!(parse_args(&args(&["--chat-session"])).is_err());
+        assert!(parse_args(&args(&["--agy-session"])).is_err());
     }
 
     #[test]

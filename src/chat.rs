@@ -8,7 +8,8 @@
 //! is the last message. Tool calls, reasoning and system messages are skipped.
 
 use std::fs::{self, OpenOptions};
-use std::path::PathBuf;
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -19,6 +20,12 @@ use crate::policy::truncate;
 
 /// Environment variable OpenCode sets for the current session.
 pub const SESSION_ENV: &str = "OPENCODE_SESSION_ID";
+
+/// Environment variable for explicit Antigravity conversation ID.
+pub const ANTIGRAVITY_SESSION_ENV: &str = "ANTIGRAVITY_CONVERSATION_ID";
+
+/// Environment variable for Antigravity brain directory override (useful for tests).
+pub const ANTIGRAVITY_BRAIN_ENV: &str = "ANTIGRAVITY_BRAIN_DIR";
 
 /// Longest fallback subject, in characters.
 const FALLBACK_SUBJECT_MAX: usize = 72;
@@ -35,7 +42,7 @@ pub enum SubjectSource {
     LastMessage,
 }
 
-/// A commit message copied from an OpenCode session.
+/// A commit message copied from an OpenCode or Antigravity session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessage {
     /// Session the message came from.
@@ -64,19 +71,394 @@ impl ChatMessage {
     }
 }
 
-/// Load and parse a session export.
-///
-/// The session is taken from `session`, then from [`SESSION_ENV`].
-pub fn load(session: Option<&str>, verbose: bool) -> Result<ChatMessage, String> {
-    let session = select_session(session)?;
-
-    if verbose {
-        eprintln!("[mm] chat: exporting OpenCode session {session}");
+/// Path to Antigravity's brain directory storing conversation transcripts.
+pub fn antigravity_brain_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var(ANTIGRAVITY_BRAIN_ENV) {
+        let path = PathBuf::from(dir);
+        if path.is_dir() {
+            return Some(path);
+        }
     }
 
-    let export = export_session(&session)?;
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let brain = home.join(".gemini/antigravity-ide/brain");
+    if brain.is_dir() { Some(brain) } else { None }
+}
 
-    parse(&export, &session)
+/// Resolve an Antigravity conversation by session ID, folder name, or file path.
+pub fn resolve_antigravity_session(session: &str) -> Option<(String, PathBuf)> {
+    let path = Path::new(session);
+    if path.is_file() {
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("antigravity")
+            .to_string();
+        return Some((name, path.to_path_buf()));
+    }
+    if path.is_dir() {
+        let log = path.join(".system_generated/logs/transcript.jsonl");
+        if log.is_file() {
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("antigravity")
+                .to_string();
+            return Some((name, log));
+        }
+        let alt = path.join("transcript.jsonl");
+        if alt.is_file() {
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("antigravity")
+                .to_string();
+            return Some((name, alt));
+        }
+    }
+
+    if let Some(brain) = antigravity_brain_dir() {
+        let dir = brain.join(session);
+        if dir.is_dir() {
+            let log = dir.join(".system_generated/logs/transcript.jsonl");
+            if log.is_file() {
+                return Some((session.to_string(), log));
+            }
+            let alt = dir.join("transcript.jsonl");
+            if alt.is_file() {
+                return Some((session.to_string(), alt));
+            }
+        }
+
+        if let Ok(entries) = fs::read_dir(&brain) {
+            for entry in entries.flatten() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with(session) && entry.path().is_dir() {
+                    let log = entry.path().join(".system_generated/logs/transcript.jsonl");
+                    if log.is_file() {
+                        return Some((name, log));
+                    }
+                    let alt = entry.path().join("transcript.jsonl");
+                    if alt.is_file() {
+                        return Some((name, alt));
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Find the latest Antigravity conversation log.
+pub fn find_latest_antigravity_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+    let brain = antigravity_brain_dir()?;
+    let entries = fs::read_dir(&brain).ok()?;
+
+    let mut candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() {
+            continue;
+        }
+
+        let name = entry.file_name().to_string_lossy().to_string();
+        if name == "tempmediaStorage" {
+            continue;
+        }
+
+        let log = path.join(".system_generated/logs/transcript.jsonl");
+        let target_log = if log.is_file() {
+            log
+        } else {
+            let alt = path.join("transcript.jsonl");
+            if alt.is_file() {
+                alt
+            } else {
+                continue;
+            }
+        };
+
+        let mtime = fs::metadata(&target_log)
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+
+        candidates.push((mtime, name, target_log));
+    }
+
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    if let Some(root) = repo_root {
+        let root_str = root.to_string_lossy();
+        for (_, name, log_path) in candidates.iter().take(20) {
+            if let Ok(mut file) = fs::File::open(log_path) {
+                use std::io::Read;
+                let mut buffer = [0u8; 65536];
+                if let Ok(n) = file.read(&mut buffer) {
+                    let sample = String::from_utf8_lossy(&buffer[..n]);
+                    if sample.contains(&*root_str) {
+                        return Some((name.clone(), log_path.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    let (_, name, log_path) = candidates.remove(0);
+    Some((name, log_path))
+}
+
+/// Extract user request prompt from Antigravity content.
+fn extract_user_request(content: &str) -> String {
+    let text = if let Some(start) = content.find("<USER_REQUEST>") {
+        let after = &content[start + "<USER_REQUEST>".len()..];
+        if let Some(end) = after.find("</USER_REQUEST>") {
+            &after[..end]
+        } else {
+            after
+        }
+    } else if let Some(meta_start) = content.find("<ADDITIONAL_METADATA>") {
+        &content[..meta_start]
+    } else {
+        content
+    };
+
+    clean_prompt_line(text)
+}
+
+/// Clean up leading @-mentions from prompt line.
+fn clean_prompt_line(text: &str) -> String {
+    let trimmed = text.trim();
+    if let Some((rest, idx)) = trimmed
+        .strip_prefix('@')
+        .and_then(|r| r.find(']').map(|i| (r, i)))
+    {
+        let after = rest[idx + 1..].trim();
+        let stripped = after.strip_prefix(':').unwrap_or(after).trim();
+        if !stripped.is_empty() {
+            return stripped.to_string();
+        }
+    }
+    trimmed.to_string()
+}
+
+/// Parse an Antigravity transcript from a reader.
+pub fn parse_antigravity_reader<R: BufRead>(
+    reader: R,
+    conversation_id: &str,
+) -> Result<ChatMessage, String> {
+    let mut latest_prompt: Option<String> = None;
+    let mut last_message: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let value: Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let source = value.get("source").and_then(Value::as_str).unwrap_or("");
+        let msg_type = value.get("type").and_then(Value::as_str).unwrap_or("");
+
+        if (source == "USER_EXPLICIT" || source == "USER") && msg_type == "USER_INPUT" {
+            if let Some(content) = value.get("content").and_then(Value::as_str) {
+                let user_request = extract_user_request(content);
+                if let Some(first) = first_line(&user_request) {
+                    let cleaned = clean_prompt_line(&first);
+                    if !cleaned.is_empty() {
+                        latest_prompt = Some(cleaned);
+                    }
+                }
+            }
+        } else if source == "MODEL" && msg_type == "PLANNER_RESPONSE" {
+            let text = value
+                .get("content")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim();
+            if !text.is_empty() {
+                last_message = Some(text.to_string());
+            }
+        }
+    }
+
+    let body = last_message.ok_or_else(|| {
+        format!(
+            "Antigravity conversation `{conversation_id}` has no assistant response text to copy"
+        )
+    })?;
+
+    let (subject, subject_source) = match latest_prompt {
+        Some(prompt) => (
+            truncate(&prompt, FALLBACK_SUBJECT_MAX),
+            SubjectSource::LatestPrompt,
+        ),
+        None => {
+            let line = first_line(&body).unwrap_or_else(|| body.clone());
+            (
+                truncate(&line, FALLBACK_SUBJECT_MAX),
+                SubjectSource::LastMessage,
+            )
+        }
+    };
+
+    Ok(ChatMessage {
+        session_id: conversation_id.to_string(),
+        subject,
+        body,
+        subject_source,
+    })
+}
+
+/// Parse an Antigravity transcript from a byte slice.
+pub fn parse_antigravity(transcript: &[u8], conversation_id: &str) -> Result<ChatMessage, String> {
+    parse_antigravity_reader(std::io::Cursor::new(transcript), conversation_id)
+}
+
+/// Load and parse an Antigravity transcript from disk.
+pub fn load_antigravity(path: &Path, conversation_id: &str) -> Result<ChatMessage, String> {
+    let file = fs::File::open(path).map_err(|error| {
+        format!(
+            "could not open Antigravity transcript {}: {error}",
+            path.display()
+        )
+    })?;
+    let reader = std::io::BufReader::new(file);
+    parse_antigravity_reader(reader, conversation_id)
+}
+
+/// Load and parse a session export or conversation log.
+///
+/// Sources supported:
+/// - Explicit Antigravity conversation or OpenCode session via `session`.
+/// - `OPENCODE_SESSION_ID` environment variable.
+/// - `ANTIGRAVITY_CONVERSATION_ID` environment variable.
+/// - Auto-detection of the latest Antigravity conversation log in `~/.gemini/antigravity-ide/brain`.
+pub fn load(
+    session: Option<&str>,
+    repo_root: Option<&Path>,
+    force_antigravity: bool,
+    verbose: bool,
+) -> Result<ChatMessage, String> {
+    let trimmed_session = session.map(str::trim).filter(|value| !value.is_empty());
+
+    if force_antigravity {
+        let (id, path) = if let Some(sess) = trimmed_session {
+            resolve_antigravity_session(sess).ok_or_else(|| {
+                format!("could not find Antigravity conversation or transcript `{sess}`")
+            })?
+        } else if let Some((id, path)) = std::env::var(ANTIGRAVITY_SESSION_ENV)
+            .or_else(|_| std::env::var("GEMINI_CONVERSATION_ID"))
+            .ok()
+            .and_then(|sess| {
+                let s = sess.trim();
+                if s.is_empty() {
+                    None
+                } else {
+                    resolve_antigravity_session(s)
+                }
+            })
+        {
+            (id, path)
+        } else {
+            find_latest_antigravity_log(repo_root)
+                .ok_or_else(|| "no Antigravity conversation log found".to_string())?
+        };
+
+        if verbose {
+            eprintln!(
+                "[mm] chat: using Antigravity log {} ({})",
+                id,
+                path.display()
+            );
+        }
+
+        return load_antigravity(&path, &id);
+    }
+
+    if let Some(sess) = trimmed_session {
+        if let Some((id, path)) = resolve_antigravity_session(sess) {
+            if verbose {
+                eprintln!(
+                    "[mm] chat: using Antigravity log {} ({})",
+                    id,
+                    path.display()
+                );
+            }
+            return load_antigravity(&path, &id);
+        }
+
+        if verbose {
+            eprintln!("[mm] chat: exporting OpenCode session {sess}");
+        }
+
+        let export = export_session(sess)?;
+        return parse(&export, sess);
+    }
+
+    if let Ok(opencode_session) = std::env::var(SESSION_ENV) {
+        let sess = opencode_session.trim();
+        if !sess.is_empty() {
+            if verbose {
+                eprintln!("[mm] chat: exporting OpenCode session {sess}");
+            }
+
+            let export = export_session(sess)?;
+            return parse(&export, sess);
+        }
+        return Err(format!(
+            "no OpenCode session selected; set {SESSION_ENV} or pass --chat-session <ID>"
+        ));
+    }
+
+    if let Ok(agy_session) =
+        std::env::var(ANTIGRAVITY_SESSION_ENV).or_else(|_| std::env::var("GEMINI_CONVERSATION_ID"))
+    {
+        let sess = agy_session.trim();
+        let resolved = if !sess.is_empty() {
+            resolve_antigravity_session(sess)
+        } else {
+            None
+        };
+        if let Some((id, path)) = resolved {
+            if verbose {
+                eprintln!(
+                    "[mm] chat: using Antigravity log {} ({})",
+                    id,
+                    path.display()
+                );
+            }
+            return load_antigravity(&path, &id);
+        }
+    }
+
+    if let Some((id, path)) = find_latest_antigravity_log(repo_root) {
+        if verbose {
+            eprintln!(
+                "[mm] chat: auto-detected Antigravity log {} ({})",
+                id,
+                path.display()
+            );
+        }
+        return load_antigravity(&path, &id);
+    }
+
+    Err(format!(
+        "no OpenCode session or Antigravity log found; set {SESSION_ENV}, {ANTIGRAVITY_SESSION_ENV}, or pass --chat-session <ID>"
+    ))
 }
 
 /// Export a session to a temporary file.
@@ -143,25 +525,6 @@ fn export_path() -> PathBuf {
     std::env::temp_dir().join(format!(
         "mm-opencode-export-{}-{nanos}-{unique}.json",
         std::process::id()
-    ))
-}
-
-/// Choose an explicit session, or the one OpenCode is running.
-fn select_session(session: Option<&str>) -> Result<String, String> {
-    if let Some(session) = session.map(str::trim).filter(|value| !value.is_empty()) {
-        return Ok(session.to_string());
-    }
-
-    if let Ok(session) = std::env::var(SESSION_ENV) {
-        let session = session.trim();
-
-        if !session.is_empty() {
-            return Ok(session.to_string());
-        }
-    }
-
-    Err(format!(
-        "no OpenCode session selected; set {SESSION_ENV} or pass --chat-session <ID>"
     ))
 }
 
@@ -566,5 +929,62 @@ mod tests {
     #[test]
     fn rejects_invalid_json() {
         assert!(parse(b"{", "ses_test").is_err());
+    }
+
+    #[test]
+    fn parses_antigravity_transcript() {
+        let transcript = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nadd support for antigravity logs\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nsome metadata\n</ADDITIONAL_METADATA>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","tool_calls":[{"name":"ls"}]}
+{"step_index":2,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Implemented support for Antigravity logs.\n\n- Added parser\n- Added tests"}
+"#;
+
+        let message = parse_antigravity(transcript.as_bytes(), "conv_123").unwrap();
+
+        assert_eq!(message.session_id, "conv_123");
+        assert_eq!(message.subject, "add support for antigravity logs");
+        assert_eq!(message.subject_source, SubjectSource::LatestPrompt);
+        assert_eq!(
+            message.body,
+            "Implemented support for Antigravity logs.\n\n- Added parser\n- Added tests"
+        );
+        assert_eq!(
+            message.message(None),
+            "add support for antigravity logs\n\nImplemented support for Antigravity logs.\n\n- Added parser\n- Added tests"
+        );
+    }
+
+    #[test]
+    fn antigravity_cleans_file_mentions_in_prompt() {
+        let transcript = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\n@[/path/to/file.rs:L1-L10] fix null check\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Fixed the null check."}
+"#;
+
+        let message = parse_antigravity(transcript.as_bytes(), "conv_456").unwrap();
+        assert_eq!(message.subject, "fix null check");
+        assert_eq!(message.body, "Fixed the null check.");
+    }
+
+    #[test]
+    fn antigravity_falls_back_to_first_line_of_assistant_message() {
+        let transcript = r#"{"step_index":0,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"First line of response\nSecond line of response"}
+"#;
+
+        let message = parse_antigravity(transcript.as_bytes(), "conv_789").unwrap();
+        assert_eq!(message.subject, "First line of response");
+        assert_eq!(message.subject_source, SubjectSource::LastMessage);
+        assert_eq!(
+            message.body,
+            "First line of response\nSecond line of response"
+        );
+    }
+
+    #[test]
+    fn antigravity_rejects_transcript_without_assistant_message() {
+        let transcript = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nonly request\n</USER_REQUEST>"}
+"#;
+
+        let error = parse_antigravity(transcript.as_bytes(), "conv_empty").unwrap_err();
+        assert!(error.contains("no assistant response text"));
+        assert!(error.contains("conv_empty"));
     }
 }

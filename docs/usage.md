@@ -68,8 +68,10 @@ mm # generate and commit
 | `-p`, `--print` | Print the message and exit; never commit |
 | `-d`, `--dry-run` | Alias for `--print` |
 | `-m`, `--message <MSG>` | Merge the generated description with an existing message, or override the chat subject |
-| `--chat` | Copy the current OpenCode chat title and last message |
-| `--chat-session <ID>` | Use a specific OpenCode session; implies `--chat` |
+| `--chat` | Copy the chat title and last message (OpenCode or Antigravity) |
+| `--chat-session <ID>` | Use a specific session ID or transcript path; implies `--chat` |
+| `--agy`, `--antigravity` | Copy the Antigravity last log commit message; implies `--chat` |
+| `--agy-session <ID>` | Use a specific Antigravity conversation or transcript; implies `--agy` |
 | `-c`, `--config <FILE>` | Use a specific commitlint config instead of searching |
 | `-s`, `--staged` | Only use staged changes; never fall back to unstaged changes |
 | `--no-verify` | Bypass Git commit hooks |
@@ -132,33 +134,35 @@ commitlint rules still apply.
 directory, the same way commitlint configuration is found. `--config` is
 unrelated: it overrides the commitlint configuration file.
 
-## Using an OpenCode chat
+## Using an OpenCode or Antigravity chat
 
-OpenCode exports each session with its `opencode` CLI. When `mm` runs inside an
-OpenCode session, `OPENCODE_SESSION_ID` identifies the current chat:
+`mm` can extract the commit message directly from local assistant chats:
+- **OpenCode**: OpenCode exports sessions using its `opencode` CLI. When `mm` runs inside an OpenCode session, `OPENCODE_SESSION_ID` identifies the current chat.
+- **Antigravity**: Antigravity saves conversation transcripts in `~/.gemini/antigravity-ide/brain/<ID>/.system_generated/logs/transcript.jsonl`. When running inside Antigravity (or when `ANTIGRAVITY_CONVERSATION_ID` is set), or via `--agy`, `mm` reads the conversation log.
 
 ```sh
-mm --chat --print # preview the copied message
-mm --chat         # commit with it
+mm --chat --print # preview copied message (auto-detects OpenCode or Antigravity)
+mm --agy --print  # preview message from the latest Antigravity log
+mm --agy          # commit using the latest Antigravity log
 ```
 
 The message is built like this:
 
-- The subject is the OpenCode session title.
-- If the title is missing or still a `New session ...` placeholder, `mm` uses
-  the first line of the latest user prompt, truncated to 72 characters. Without
-  a user prompt, the first line of the copied message is used.
-- The body is the last assistant message, matching OpenCode's `/copy` command.
-  Only `text` parts are copied; tool calls and reasoning are left out. If the
-  last message is a completed compaction, its summary is copied instead.
-- `--chat-session <ID>` selects another session and implies `--chat`.
-- `--message` overrides the subject; the copied message remains the body.
+- **Subject**:
+  - For OpenCode, the session title is used (or the first line of the latest user prompt, truncated to 72 characters, if untitled).
+  - For Antigravity, the first line of the latest user request (extracted from `<USER_REQUEST>` and stripped of `@` file references) is used, truncated to 72 characters. If absent, the first line of the assistant message is used.
+- **Body**: The last assistant response (`PLANNER_RESPONSE` or OpenCode assistant text message). Tool calls, reasoning, and metadata are excluded.
+- `--agy` or `--antigravity` forces copying from Antigravity logs.
+- `--agy-session <ID>` or `--chat-session <ID>` selects a specific session or transcript path and implies `--chat`.
+- `--message` overrides the subject; the copied assistant message remains the body.
 
-`--chat` skips path-based generation, `mm.json` formatting, and commitlint
-message shaping. It still uses the normal change selection, `--add`, `--staged`,
-`--edit`, `--no-verify`, and `--print` behavior. The `opencode` CLI must be on
-`PATH`, the session must exist locally, and the session must contain an
-assistant message with text or a completed compaction summary.
+`--chat` / `--agy` skips path-based generation, `mm.json` formatting, and commitlint
+message shaping when a chat log is successfully loaded. If copying the log from
+the AI Agent fails (for example, missing session, no transcript found, CLI failure,
+or empty messages), `mm` automatically falls back to path-based commit message
+generation instead of aborting with an error. In `--verbose` mode, the failure and
+fallback are reported on stderr. It still uses the normal change selection,
+`--add`, `--staged`, `--edit`, `--no-verify`, and `--print` behavior.
 
 ## commitlint configuration
 
@@ -171,8 +175,8 @@ configs are evaluated with `node`; `extends` presets additionally require
 Applied rules are the ones that affect the generated header: type and scope
 enums/case, type/scope presence, type/header/subject length, and trailing full
 stops. Rules for bodies, footers, and trailers are not applied to generated
-messages because `mm` writes only a one-line header. `--chat` copies a
-multi-line message and bypasses these generation rules.
+messages because `mm` writes only a one-line header. `--chat` and `--agy` copy a
+multi-line message and bypass these generation rules.
 
 Use an explicit config with:
 
@@ -188,8 +192,10 @@ mm -a # include untracked files, then commit
 mm -s # commit only what is already staged
 mm -e # review the message in an editor
 mm --no-verify # bypass Git hooks
-mm --chat # copy the current OpenCode chat
-mm --chat-session ses_123 --print # preview another session
+mm --chat # copy the current OpenCode or Antigravity chat
+mm --agy --print # preview the last Antigravity conversation log
+mm --agy-session conv-123 # commit with a specific Antigravity conversation
+mm --chat-session ses_123 --print # preview another OpenCode session
 mm -m 'JIRA-1 fix: keep this' # keep an existing prefix/description
 mm --verbose --print # explain what mm is doing on stderr
 ```

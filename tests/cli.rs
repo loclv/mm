@@ -74,11 +74,24 @@ impl Repo {
 
     /// Run `mm` with extra environment variables.
     fn mm_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
+        self.mm_with_env_and_remove(args, envs, &[])
+    }
+
+    /// Run `mm` with extra environment variables and specific removed variables.
+    fn mm_with_env_and_remove(
+        &self,
+        args: &[&str],
+        envs: &[(&str, &str)],
+        remove_envs: &[&str],
+    ) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mm"));
         command.args(args).current_dir(&self.path);
 
         for (key, value) in envs {
             command.env(key, value);
+        }
+        for key in remove_envs {
+            command.env_remove(key);
         }
 
         command.output().expect("run mm")
@@ -654,15 +667,49 @@ fn chat_session_implies_chat_and_falls_back_without_a_title() {
 }
 
 #[test]
-fn reports_a_missing_opencode_session() {
+fn falls_back_to_auto_commit_when_chat_session_fails() {
     let repo = Repo::new();
     repo.write("foo.txt", "new\n");
     repo.git(&["add", "foo.txt"]);
 
+    // Without verbose: clean output with generated commit message
     let output = repo.mm_with_env(&["--chat", "--print"], &[("OPENCODE_SESSION_ID", "")]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "feat: create foo.txt");
 
-    assert!(!output.status.success());
-    assert!(stderr(&output).contains("OPENCODE_SESSION_ID"));
+    // With verbose: diagnostics report the fallback
+    let verbose_output = repo.mm_with_env(
+        &["--chat", "--print", "--verbose"],
+        &[("OPENCODE_SESSION_ID", "")],
+    );
+    assert!(
+        verbose_output.status.success(),
+        "{}",
+        stderr(&verbose_output)
+    );
+    assert_eq!(stdout(&verbose_output), "feat: create foo.txt");
+    assert!(stderr(&verbose_output).contains("failed to copy log from AI Agent"));
+    assert!(stderr(&verbose_output).contains("falling back to auto commit message"));
+}
+
+#[test]
+fn falls_back_to_auto_commit_when_antigravity_log_fails() {
+    let repo = Repo::new();
+    repo.write("bar.rs", "pub fn bar() {}\n");
+    repo.git(&["add", "bar.rs"]);
+
+    let empty_brain = std::env::temp_dir().join(format!("mm-empty-brain-{}", std::process::id()));
+    fs::create_dir_all(&empty_brain).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--agy", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy())],
+        &["ANTIGRAVITY_CONVERSATION_ID"],
+    );
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "feat: create bar.rs");
+
+    let _ = fs::remove_dir_all(empty_brain);
 }
 
 #[cfg(unix)]
@@ -709,4 +756,138 @@ fn includes_relative_path_for_created_updated_and_deleted_files() {
     let output = repo.mm(&["--print"]);
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(stdout(&output), "chore: delete docs/dev.md");
+}
+
+#[test]
+fn copies_antigravity_last_log_with_agy_flag() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-{}", std::process::id()));
+    let conv_dir = brain.join("conv-12345");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let transcript = format!(
+        r#"{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nfix parser edge cases\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: {}\n</ADDITIONAL_METADATA>"}}
+{{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Fixed parser edge cases.\n\n- Handled trailing comma\n- Added regression test"}}
+"#,
+        repo.path().display()
+    );
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--agy", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "fix parser edge cases\n\nFixed parser edge cases.\n\n- Handled trailing comma\n- Added regression test"
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
+fn copies_antigravity_log_with_agy_session() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-sess-{}", std::process::id()));
+    let conv_dir = brain.join("my-specific-conv");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let transcript = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nexplicit session prompt\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Specific session answer."}
+"#;
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env(
+        &["--agy-session", "my-specific-conv", "--print"],
+        &[
+            ("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy()),
+            ("ANTIGRAVITY_CONVERSATION_ID", ""),
+        ],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "explicit session prompt\n\nSpecific session answer."
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
+fn copies_antigravity_log_with_conversation_id_env() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-env-{}", std::process::id()));
+    let conv_dir = brain.join("env-conv-456");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let transcript = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nenv session prompt\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Env session response."}
+"#;
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env(
+        &["--agy", "--print"],
+        &[
+            ("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy()),
+            ("ANTIGRAVITY_CONVERSATION_ID", "env-conv-456"),
+        ],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "env session prompt\n\nEnv session response."
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
+fn chat_auto_detects_antigravity_when_opencode_not_set() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-auto-{}", std::process::id()));
+    let conv_dir = brain.join("auto-detected-conv");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let transcript = format!(
+        r#"{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nauto detected prompt\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: {}\n</ADDITIONAL_METADATA>"}}
+{{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Auto detected response body."}}
+"#,
+        repo.path().display()
+    );
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["OPENCODE_SESSION_ID", "ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "auto detected prompt\n\nAuto detected response body."
+    );
+
+    let _ = fs::remove_dir_all(brain);
 }

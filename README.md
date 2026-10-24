@@ -10,9 +10,9 @@ mm
 By default there is no AI or network call. The message is built from the paths
 and change types that Git reports.
 If the project has a commitlint configuration, its type,
-scope and length rules are applied too. Inside OpenCode, `--chat` can copy the
-current session title and last assistant message instead; see
-[Using an OpenCode chat](#using-an-opencode-chat).
+scope and length rules are applied too. Inside OpenCode or Antigravity, `--chat` or `--agy`
+can copy the session/prompt and last assistant message instead; see
+[Using an OpenCode or Antigravity chat](#using-an-opencode-or-antigravity-chat).
 
 ## Install
 
@@ -37,7 +37,8 @@ mm --print # Show the message without committing
 mm --add # Stage everything (including new files), then commit
 mm --edit # Open the editor before committing
 mm --staged # Use only staged changes
-mm --chat # Copy the current OpenCode chat title and last message
+mm --chat # Copy the current OpenCode or Antigravity chat
+mm --agy # Copy the latest Antigravity log commit message
 mm -m 'JIRA-1: fix' # Keep an existing prefix/description (or override a chat subject)
 ```
 
@@ -63,27 +64,22 @@ for from the current directory upwards, stopping at your home directory):
 Messages then use plain descriptions such as `update README.md`. An explicit
 `--message` prefix is still preserved, and commitlint rules still apply.
 
-### Using an OpenCode chat
+### Using an OpenCode or Antigravity chat
 
-OpenCode sets `OPENCODE_SESSION_ID` for the current chat. Pass `--chat` to copy
-that session into the commit message:
+`mm` can extract the commit message from OpenCode or Antigravity chats:
 
 ```sh
-mm --chat --print # preview the message
-mm --chat # commit with it
+mm --chat --print # preview the message (auto-detects OpenCode or Antigravity)
+mm --agy --print  # preview message from the latest Antigravity log
+mm --agy          # commit using the latest Antigravity log
 ```
 
-- The subject is the session title.
-- If the session has no title yet, `mm` uses the first line of the latest user
-  prompt, truncated to 72 characters.
-- The body is the last assistant message, matching OpenCode's `/copy` command.
-  When the last message is a completed compaction, its summary is used. Tool
-  calls and reasoning are omitted.
-- `--chat-session <ID>` selects another session and implies `--chat`.
+- **OpenCode**: `OPENCODE_SESSION_ID` selects the session. The subject is the session title (or latest user prompt line), and the body is the last assistant message (or compaction summary).
+- **Antigravity**: Transcript logs from `~/.gemini/antigravity-ide/brain` (or `ANTIGRAVITY_CONVERSATION_ID`) are read. The subject is the latest user request line, and the body is the last assistant response.
+- `--agy-session <ID>` or `--chat-session <ID>` selects a specific session or transcript path.
 - `--message` overrides the subject; the copied message remains the body.
-- `--chat` skips path-based generation and commitlint message shaping. It
-  requires the `opencode` CLI, an existing local session, and an assistant
-  message with text.
+- `--chat` and `--agy` skip path-based generation and commitlint message shaping.
+- If copying the log from the AI Agent fails, `mm` automatically falls back to generating the commit message from Git changes.
 
 ### How changes are selected
 
