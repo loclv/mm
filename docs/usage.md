@@ -2,7 +2,7 @@
 
 `mm` generates a Conventional Commit message from the changes Git reports, then
 commits them. By default it is deterministic and path-based: no AI, no network
-calls. `--chat` instead copies the title and visible transcript from a local
+calls. `--chat` instead copies the title and last assistant message from a local
 OpenCode session.
 
 ## Requirements
@@ -68,7 +68,7 @@ mm # generate and commit
 | `-p`, `--print` | Print the message and exit; never commit |
 | `-d`, `--dry-run` | Alias for `--print` |
 | `-m`, `--message <MSG>` | Merge the generated description with an existing message, or override the chat subject |
-| `--chat` | Copy the current OpenCode chat title and transcript |
+| `--chat` | Copy the current OpenCode chat title and last message |
 | `--chat-session <ID>` | Use a specific OpenCode session; implies `--chat` |
 | `-c`, `--config <FILE>` | Use a specific commitlint config instead of searching |
 | `-s`, `--staged` | Only use staged changes; never fall back to unstaged changes |
@@ -146,16 +146,19 @@ The message is built like this:
 
 - The subject is the OpenCode session title.
 - If the title is missing or still a `New session ...` placeholder, `mm` uses
-  the first line of the latest user prompt, truncated to 72 characters.
-- The body is the visible transcript in order: user prompts and assistant text.
-  Tool calls, reasoning, system messages, and compaction summaries are left out.
+  the first line of the latest user prompt, truncated to 72 characters. Without
+  a user prompt, the first line of the copied message is used.
+- The body is the last assistant message, matching OpenCode's `/copy` command.
+  Only `text` parts are copied; tool calls and reasoning are left out. If the
+  last message is a completed compaction, its summary is copied instead.
 - `--chat-session <ID>` selects another session and implies `--chat`.
-- `--message` overrides the subject; the transcript remains the body.
+- `--message` overrides the subject; the copied message remains the body.
 
 `--chat` skips path-based generation, `mm.json` formatting, and commitlint
 message shaping. It still uses the normal change selection, `--add`, `--staged`,
 `--edit`, `--no-verify`, and `--print` behavior. The `opencode` CLI must be on
-`PATH`, and the session must exist locally.
+`PATH`, the session must exist locally, and the session must contain an
+assistant message with text or a completed compaction summary.
 
 ## commitlint configuration
 
@@ -223,6 +226,10 @@ pass `--chat-session <ID>`.
 `could not run opencode session export`
 Check that the `opencode` CLI is installed and on `PATH`, and that the session ID
 exists.
+
+`has no assistant text or completed compaction summary to copy`
+The session has no assistant reply or completed compaction yet. Send a prompt
+and wait for the answer, then rerun `mm --chat`.
 
 `mm: command not found`
 Check that `~/.cargo/bin` is in `PATH`, then start a new zsh session or run

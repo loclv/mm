@@ -3,8 +3,9 @@
 //! OpenCode owns its session database, but it exposes a stable JSON export
 //! through `opencode session export <id>`. The export contains the session
 //! title and the visible transcript. `mm --chat` uses the title as the commit
-//! subject and the user prompts plus assistant text as the body. Tool calls,
-//! reasoning, system messages and compaction summaries are not copied.
+//! subject and copies the last assistant message as the body, matching
+//! OpenCode's `/copy` command. A completed compaction summary is copied when it
+//! is the last message. Tool calls, reasoning and system messages are skipped.
 
 use std::fs::{self, OpenOptions};
 use std::path::PathBuf;
@@ -29,6 +30,9 @@ pub enum SubjectSource {
     Title,
     /// The first line of the latest user prompt, used when there is no title.
     LatestPrompt,
+    /// The first line of the copied assistant message, used when there is no
+    /// title or user prompt.
+    LastMessage,
 }
 
 /// A commit message copied from an OpenCode session.
@@ -38,7 +42,7 @@ pub struct ChatMessage {
     pub session_id: String,
     /// Subject line.
     pub subject: String,
-    /// Visible user and assistant text, in order.
+    /// The last assistant text or completed compaction summary, like `/copy`.
     pub body: String,
     /// Whether [`ChatMessage::subject`] is the session title or a fallback.
     pub subject_source: SubjectSource,
@@ -180,56 +184,54 @@ pub fn parse(export: &[u8], session_id: &str) -> Result<ChatMessage, String> {
         .map(single_line)
         .filter(|title| !title.is_empty() && !is_placeholder_title(title));
 
-    let mut blocks = Vec::new();
     let mut latest_prompt = None;
+    let mut last_message = None;
 
     for message in messages {
         let kind = message_kind(message);
 
-        let text = match kind {
+        match kind {
             "user" => {
-                let text = user_text(message);
-
-                if let Some(line) = text.as_deref().and_then(first_line) {
+                if let Some(line) = user_text(message).as_deref().and_then(first_line) {
                     latest_prompt = Some(line);
                 }
-
-                text
             }
-            "assistant" => assistant_text(message),
-            _ => None,
-        };
-
-        let Some(text) = text.map(|text| text.trim().to_string()) else {
-            continue;
-        };
-
-        if text.is_empty() {
-            continue;
+            "assistant" => {
+                if let Some(text) = assistant_copy_text(message) {
+                    last_message = Some(text);
+                }
+            }
+            "compaction" => {
+                if let Some(text) = compaction_text(message) {
+                    last_message = Some(text);
+                }
+            }
+            _ => {}
         }
-
-        let label = match kind {
-            "user" => "User",
-            "assistant" => "Assistant",
-            _ => continue,
-        };
-
-        blocks.push(format!("{label}:\n{text}"));
     }
 
-    let body = blocks.join("\n\n");
+    let body = last_message.ok_or_else(|| {
+        format!(
+            "OpenCode session `{session_id}` has no assistant text or completed compaction summary to copy"
+        )
+    })?;
+
     let (subject, subject_source) = match title {
         Some(title) => (title, SubjectSource::Title),
-        None => {
-            let prompt = latest_prompt.ok_or_else(|| {
-                format!("OpenCode session `{session_id}` has no title and no user messages to copy")
-            })?;
-
-            (
+        None => match latest_prompt {
+            Some(prompt) => (
                 truncate(&prompt, FALLBACK_SUBJECT_MAX),
                 SubjectSource::LatestPrompt,
-            )
-        }
+            ),
+            None => {
+                let line = first_line(&body).unwrap_or_else(|| body.clone());
+
+                (
+                    truncate(&line, FALLBACK_SUBJECT_MAX),
+                    SubjectSource::LastMessage,
+                )
+            }
+        },
     };
 
     Ok(ChatMessage {
@@ -254,9 +256,43 @@ fn user_text(message: &Value) -> Option<String> {
     non_empty_text(message.get("text")).or_else(|| content_text(message))
 }
 
-/// Visible text of an assistant message, excluding reasoning and tools.
-fn assistant_text(message: &Value) -> Option<String> {
-    content_text(message).or_else(|| non_empty_text(message.get("text")))
+/// Visible text of an assistant message, joined like OpenCode's `/copy`.
+fn assistant_copy_text(message: &Value) -> Option<String> {
+    copy_content_text(message).or_else(|| non_empty_text(message.get("text")))
+}
+
+/// The summary of a completed compaction message.
+fn compaction_text(message: &Value) -> Option<String> {
+    let completed = message.get("status").and_then(Value::as_str) == Some("completed");
+
+    if completed {
+        non_empty_text(message.get("summary"))
+    } else {
+        None
+    }
+}
+
+/// Join the `text` parts of a `content` array the way `/copy` does.
+fn copy_content_text(message: &Value) -> Option<String> {
+    match message.get("content")? {
+        Value::String(text) => Some(text.trim().to_string()).filter(|text| !text.is_empty()),
+        Value::Array(parts) => {
+            let texts: Vec<&str> = parts
+                .iter()
+                .filter(|part| part.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|part| part.get("text").and_then(Value::as_str))
+                .collect();
+            let text = texts.join("\n");
+            let text = text.trim();
+
+            if text.is_empty() {
+                None
+            } else {
+                Some(text.to_string())
+            }
+        }
+        _ => None,
+    }
 }
 
 /// Read a non-blank JSON string.
@@ -355,15 +391,13 @@ mod tests {
     }
 
     #[test]
-    fn copies_only_visible_text_into_the_body() {
+    fn copies_only_visible_text_from_the_last_assistant_message() {
         let message = parse(EXPORT.as_bytes(), "ses_test").unwrap();
 
-        assert_eq!(
-            message.body,
-            "User:\nPlease add chat import.\nUse the title.\n\nAssistant:\nImplemented the import."
-        );
+        assert_eq!(message.body, "Implemented the import.");
         assert!(!message.body.contains("not visible"));
         assert!(!message.body.contains("shell"));
+        assert!(!message.body.contains("Please add chat import."));
     }
 
     #[test]
@@ -372,7 +406,7 @@ mod tests {
 
         assert_eq!(
             message.message(None),
-            "Add chat import\n\nUser:\nPlease add chat import.\nUse the title.\n\nAssistant:\nImplemented the import."
+            "Add chat import\n\nImplemented the import."
         );
     }
 
@@ -382,8 +416,76 @@ mod tests {
 
         assert_eq!(
             message.message(Some("feat: manual subject")),
-            "feat: manual subject\n\nUser:\nPlease add chat import.\nUse the title.\n\nAssistant:\nImplemented the import."
+            "feat: manual subject\n\nImplemented the import."
         );
+    }
+
+    #[test]
+    fn copies_the_last_assistant_message_not_the_transcript() {
+        let export = r#"{
+            "info": { "title": "Explain the change" },
+            "messages": [
+                { "type": "user", "text": "first request" },
+                { "type": "assistant", "content": [{ "type": "text", "text": "first answer" }] },
+                { "type": "user", "text": "follow up" },
+                { "type": "assistant", "content": [{ "type": "text", "text": "second answer" }] }
+            ]
+        }"#;
+
+        let message = parse(export.as_bytes(), "ses_test").unwrap();
+
+        assert_eq!(message.body, "second answer");
+    }
+
+    #[test]
+    fn joins_text_parts_with_a_newline_like_copy() {
+        let export = r#"{
+            "info": { "title": "Explain the change" },
+            "messages": [
+                {
+                    "type": "assistant",
+                    "content": [
+                        { "type": "text", "text": "first paragraph" },
+                        { "type": "reasoning", "text": "hidden" },
+                        { "type": "text", "text": "second paragraph" }
+                    ]
+                }
+            ]
+        }"#;
+
+        let message = parse(export.as_bytes(), "ses_test").unwrap();
+
+        assert_eq!(message.body, "first paragraph\nsecond paragraph");
+    }
+
+    #[test]
+    fn copies_a_completed_compaction_summary() {
+        let export = r#"{
+            "info": { "title": "Explain the change" },
+            "messages": [
+                { "type": "assistant", "content": [{ "type": "text", "text": "earlier answer" }] },
+                { "type": "compaction", "status": "completed", "summary": "  Summary of the session.  " }
+            ]
+        }"#;
+
+        let message = parse(export.as_bytes(), "ses_test").unwrap();
+
+        assert_eq!(message.body, "Summary of the session.");
+    }
+
+    #[test]
+    fn ignores_an_incomplete_compaction() {
+        let export = r#"{
+            "info": { "title": "Explain the change" },
+            "messages": [
+                { "type": "assistant", "content": [{ "type": "text", "text": "earlier answer" }] },
+                { "type": "compaction", "status": "running", "summary": "not ready" }
+            ]
+        }"#;
+
+        let message = parse(export.as_bytes(), "ses_test").unwrap();
+
+        assert_eq!(message.body, "earlier answer");
     }
 
     #[test]
@@ -401,15 +503,33 @@ mod tests {
 
         assert_eq!(message.subject, "latest request");
         assert_eq!(message.subject_source, SubjectSource::LatestPrompt);
-        assert!(message.body.contains("first request"));
-        assert!(message.body.contains("latest request"));
+        assert_eq!(message.body, "first answer");
+    }
+
+    #[test]
+    fn falls_back_to_the_last_message_without_a_title_or_prompt() {
+        let export = r#"{
+            "info": { "id": "ses_test" },
+            "messages": [
+                { "type": "assistant", "content": [{ "type": "text", "text": "answer only\nmore detail" }] }
+            ]
+        }"#;
+
+        let message = parse(export.as_bytes(), "ses_test").unwrap();
+
+        assert_eq!(message.subject, "answer only");
+        assert_eq!(message.subject_source, SubjectSource::LastMessage);
+        assert_eq!(message.body, "answer only\nmore detail");
     }
 
     #[test]
     fn ignores_placeholder_titles() {
         let export = r#"{
             "info": { "title": "New session - 2026-10-24T09:16:27.949Z" },
-            "messages": [{ "type": "user", "text": "real request" }]
+            "messages": [
+                { "type": "user", "text": "real request" },
+                { "type": "assistant", "content": [{ "type": "text", "text": "the answer" }] }
+            ]
         }"#;
 
         let message = parse(export.as_bytes(), "ses_test").unwrap();
@@ -422,7 +542,10 @@ mod tests {
     fn truncates_a_long_fallback_subject() {
         let export = r#"{
             "info": {},
-            "messages": [{ "type": "user", "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz" }]
+            "messages": [
+                { "type": "user", "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz" },
+                { "type": "assistant", "content": [{ "type": "text", "text": "the answer" }] }
+            ]
         }"#;
 
         let message = parse(export.as_bytes(), "ses_test").unwrap();
@@ -432,11 +555,11 @@ mod tests {
     }
 
     #[test]
-    fn rejects_an_export_without_a_title_or_prompt() {
-        let export = r#"{ "info": {}, "messages": [] }"#;
+    fn rejects_an_export_without_copyable_text() {
+        let export = r#"{ "info": { "title": "Empty" }, "messages": [] }"#;
         let error = parse(export.as_bytes(), "ses_test").unwrap_err();
 
-        assert!(error.contains("no title"));
+        assert!(error.contains("no assistant text"));
         assert!(error.contains("ses_test"));
     }
 

@@ -564,6 +564,15 @@ const CHAT_EXPORT: &str = r#"{
                 { "type": "text", "text": "Implemented the import." },
                 { "type": "tool", "name": "shell" }
             ]
+        },
+        { "type": "user", "text": "Please refine it." },
+        {
+            "type": "assistant",
+            "content": [
+                { "type": "reasoning", "text": "later reasoning" },
+                { "type": "text", "text": "Final answer." },
+                { "type": "tool", "name": "shell" }
+            ]
         }
     ]
 }"#;
@@ -581,11 +590,10 @@ fn copies_the_current_opencode_chat_with_print() {
     let output = repo.mm_with_env(&["--chat", "--print"], &env_refs(&envs));
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(
-        stdout(&output),
-        "Add chat import\n\nUser:\nPlease add chat import.\nKeep the body.\n\nAssistant:\nImplemented the import."
-    );
+    assert_eq!(stdout(&output), "Add chat import\n\nFinal answer.");
     assert!(!stdout(&output).contains("private reasoning"));
+    assert!(!stdout(&output).contains("later reasoning"));
+    assert!(!stdout(&output).contains("Implemented the import."));
     assert_eq!(
         fs::read_to_string(&args_path).expect("read fake opencode arguments"),
         "session export ses_test"
@@ -610,7 +618,7 @@ fn commits_the_chat_title_and_body() {
     assert_eq!(repo.latest_subject(), "Add chat import");
     assert!(
         repo.git(&["log", "-1", "--format=%b"])
-            .contains("Implemented the import.")
+            .contains("Final answer.")
     );
 }
 
@@ -625,7 +633,8 @@ fn chat_session_implies_chat_and_falls_back_without_a_title() {
         "info": {},
         "messages": [
             { "type": "user", "text": "first request" },
-            { "type": "user", "text": "latest request\nwith detail" }
+            { "type": "user", "text": "latest request\nwith detail" },
+            { "type": "assistant", "content": [{ "type": "text", "text": "latest answer" }] }
         ]
     }"#;
     let (bin, fixture) = fake_opencode(&repo, export);
@@ -637,7 +646,7 @@ fn chat_session_implies_chat_and_falls_back_without_a_title() {
     );
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stdout(&output).starts_with("latest request\n\nUser:\nfirst request"));
+    assert_eq!(stdout(&output), "latest request\n\nlatest answer");
     assert_eq!(
         fs::read_to_string(&args_path).expect("read fake opencode arguments"),
         "session export ses_other"
@@ -673,8 +682,5 @@ fn chat_does_not_load_project_configuration() {
     );
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(
-        stdout(&output),
-        "Add chat import\n\nUser:\nPlease add chat import.\nKeep the body.\n\nAssistant:\nImplemented the import."
-    );
+    assert_eq!(stdout(&output), "Add chat import\n\nFinal answer.");
 }

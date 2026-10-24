@@ -41,14 +41,18 @@ Pipeline (`--chat`): `cli::run` → `Git::discover` → `Git::changes` →
   general ones. `message.rs` owns wording, `policy.rs` translates commitlint
   rules, and `commitlint.rs` handles discovery/loading.
 - `chat.rs` shells out to `opencode session export <id>` and parses its JSON.
-  `--chat` uses the session title as the subject and user/assistant text as the
-  body; tool calls, reasoning, system messages and compaction are skipped.
+  `--chat` uses the session title as the subject and copies the last assistant
+  message as the body, matching OpenCode's `/copy`; a completed compaction
+  summary wins when it is the last message. Only `text` parts are joined with
+  newlines; tool calls, reasoning and system messages are skipped.
   `OPENCODE_SESSION_ID` selects the session, `--chat-session` overrides it, and
   `--message` overrides the copied subject. If the title is absent or a
-  `New session ...` placeholder, the latest user prompt's first line is used.
+  `New session ...` placeholder, the latest user prompt's first line is used,
+  then the first line of the copied message. A session with no copyable text is
+  an error.
 - `Policy` intentionally supports only rules that shape the single-line header
   (type/scope/length/full stop). Bodies, footers and trailers are never
-  generated except in `--chat` mode, which copies an existing transcript and
+  generated except in `--chat` mode, which copies the last assistant message and
   bypasses commitlint shaping.
 - Change selection is compatibility behavior: staged changes win; otherwise
   tracked worktree changes are committed with `.` as a pathspec; untracked files

@@ -1,6 +1,6 @@
 [package]
 name = "mm"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Generate a Conventional Commit message from Git changes and commit it"
 license = "MIT"

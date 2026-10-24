@@ -66,8 +66,8 @@ scope and length rules are applied to the generated message.
 Messages follow Conventional Commits by default. Add `mm.json` with
 {\"conventionalCommits\": false} to generate plain descriptions instead.
 
-Pass --chat to copy the title and visible transcript from the current OpenCode
-session instead; chat messages are not reshaped by commitlint. Use
+Pass --chat to copy the title and last assistant message from the current
+OpenCode session instead; chat messages are not reshaped by commitlint. Use
 --chat-session <ID> to select a different session.
 
 Options:
@@ -76,7 +76,7 @@ Options:
   -p, --print            Print the generated message and exit without committing
   -d, --dry-run          Alias for --print
   -m, --message <MSG>    Merge the generated description (or override a chat subject)
-      --chat             Copy the OpenCode chat title and transcript
+      --chat             Copy the OpenCode chat title and last message
       --chat-session <ID>  Use a specific OpenCode session (implies --chat)
   -c, --config <FILE>    Use this commitlint configuration instead of searching
   -s, --staged           Only use staged changes; never fall back to unstaged
@@ -211,6 +211,9 @@ pub fn execute(options: &Options) -> Result<(), String> {
                     chat::SubjectSource::Title => "using the session title",
                     chat::SubjectSource::LatestPrompt => {
                         "no session title; using the latest user prompt"
+                    }
+                    chat::SubjectSource::LastMessage => {
+                        "no session title or user prompt; using the copied message"
                     }
                 }
             );
