@@ -1,0 +1,407 @@
+//! Build the commit message from parsed file changes.
+//!
+//! This is the Rust equivalent of `prepareCommitMsg.ts`.
+
+use crate::constants::AGGREGATE_MIN;
+use crate::conventional::{Action, ConventionalType, get_convention_type, lookup_action};
+use crate::git::FileChange;
+use crate::message::{count_files_desc, named_files_desc, one_change};
+use crate::policy::Policy;
+
+/// A Conventional Commit prefix plus a description.
+///
+/// The prefix is a string rather than an enum so that custom types from a
+/// commitlint configuration (for example `wip` or `deps`) can be used.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConvCommitMsg {
+    pub type_prefix: String,
+    pub description: String,
+}
+
+/// Pieces recovered from an existing commit message.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MsgPieces {
+    pub custom_prefix: String,
+    pub type_prefix: String,
+    pub description: String,
+}
+
+/// Join two strings with a space, ignoring empty or identical values.
+pub fn join_with_space(first: &str, second: &str) -> String {
+    let first = first.trim();
+    let second = second.trim();
+
+    if first == second {
+        return first.to_string();
+    }
+
+    format!("{first} {second}").trim().to_string()
+}
+
+/// Join two strings with a colon and space.
+pub fn join_with_colon(first: &str, second: &str) -> String {
+    format!("{first}: {second}")
+}
+
+/// Pick the Conventional Commit type for one change.
+pub fn prefix_from_change(change: &FileChange) -> Result<ConventionalType, String> {
+    let action = lookup_action(change.x)?;
+
+    Ok(get_convention_type(action, &change.from))
+}
+
+/// Generate the prefix and description for a single change.
+pub fn msg_one(change: &FileChange) -> Result<ConvCommitMsg, String> {
+    Ok(ConvCommitMsg {
+        type_prefix: prefix_from_change(change)?.as_str().to_string(),
+        description: one_change(change)?,
+    })
+}
+
+/// Reduce several types to one.
+///
+/// - No items gives `Unknown`.
+/// - Identical items keep that type.
+/// - Any `build(deps)` wins over differing types, so a lockfile change is not
+///   lost when `package.json` also changed.
+/// - Everything else is `Unknown`.
+pub fn collapse(types: &[ConventionalType]) -> ConventionalType {
+    match types {
+        [] => ConventionalType::Unknown,
+        [first, rest @ ..] if rest.iter().all(|other| other == first) => *first,
+        _ if types.contains(&ConventionalType::BuildDependencies) => {
+            ConventionalType::BuildDependencies
+        }
+        _ => ConventionalType::Unknown,
+    }
+}
+
+/// Generate the prefix and description for a few named changes.
+pub fn msg_named(changes: &[FileChange]) -> Result<ConvCommitMsg, String> {
+    let types: Vec<ConventionalType> = changes
+        .iter()
+        .map(prefix_from_change)
+        .collect::<Result<_, _>>()?;
+
+    Ok(ConvCommitMsg {
+        type_prefix: collapse(&types).as_str().to_string(),
+        description: named_files_desc(changes),
+    })
+}
+
+/// Generate the description for many changes using counts.
+pub fn msg_count(changes: &[FileChange]) -> ConvCommitMsg {
+    ConvCommitMsg {
+        type_prefix: String::new(),
+        description: count_files_desc(changes),
+    }
+}
+
+/// Describe one or more changes.
+///
+/// One file is described in full, up to [`AGGREGATE_MIN`] files are named, and
+/// larger sets are summarised by count.
+pub fn msg_from_changes(changes: &[FileChange]) -> Result<ConvCommitMsg, String> {
+    match changes {
+        [] => Ok(msg_count(changes)),
+        [only] => msg_one(only),
+        _ if changes.len() < AGGREGATE_MIN => msg_named(changes),
+        _ => Ok(msg_count(changes)),
+    }
+}
+
+/// Format a message as `type: description`, or just the description when the
+/// type is unknown.
+pub fn format_msg(message: &ConvCommitMsg) -> String {
+    if message.type_prefix.is_empty() {
+        return message.description.clone();
+    }
+
+    join_with_colon(&message.type_prefix, &message.description)
+}
+
+/// Split an existing commit message into its prefixes and description.
+pub fn split_msg(message: &str) -> MsgPieces {
+    let (prefixes, description) = match message.split_once(':') {
+        Some((prefixes, description)) => (prefixes, description.trim()),
+        None => ("", message.trim()),
+    };
+
+    let (custom_prefix, type_prefix) = match prefixes.rsplit_once(' ') {
+        Some((custom, kind)) => (custom, kind),
+        None => ("", prefixes),
+    };
+
+    MsgPieces {
+        custom_prefix: custom_prefix.to_string(),
+        type_prefix: type_prefix.to_string(),
+        description: description.to_string(),
+    }
+}
+
+/// Combine generated pieces with pieces from an existing message.
+pub fn join_old_and_new(auto: &ConvCommitMsg, old: &MsgPieces) -> String {
+    let type_prefix = if !old.type_prefix.is_empty() {
+        old.type_prefix.clone()
+    } else {
+        auto.type_prefix.clone()
+    };
+
+    let description = join_with_space(&auto.description, &old.description);
+
+    if type_prefix.is_empty() {
+        return description;
+    }
+
+    let prefix = join_with_space(&old.custom_prefix, &type_prefix);
+
+    join_with_colon(&prefix, &description)
+}
+
+/// Combine an existing message with the auto-generated values.
+pub fn combine_old_and_new(auto_type: &str, auto_desc: &str, old_msg: &str) -> String {
+    let auto = ConvCommitMsg {
+        type_prefix: auto_type.to_string(),
+        description: auto_desc.to_string(),
+    };
+
+    if old_msg.is_empty() {
+        return format_msg(&auto);
+    }
+
+    join_old_and_new(&auto, &split_msg(old_msg))
+}
+
+/// Merge generated pieces with an existing message.
+fn merge_message(auto: &ConvCommitMsg, old_msg: Option<&str>) -> String {
+    match old_msg {
+        Some(old) if !old.is_empty() => {
+            combine_old_and_new(&auto.type_prefix, &auto.description, old)
+        }
+        _ => format_msg(auto),
+    }
+}
+
+/// Generate a message, optionally reusing an existing one.
+///
+/// An existing type prefix wins over the generated one, and any existing
+/// description is kept after the generated description.
+pub fn generate_msg(changes: &[FileChange], old_msg: Option<&str>) -> Result<String, String> {
+    generate_msg_with_policy(changes, old_msg, &Policy::default())
+}
+
+/// Generate a message which follows a commitlint [`Policy`].
+///
+/// The policy can restrict types and scopes, change their case, and limit the
+/// header length. When a long named-file message does not fit, the generator
+/// falls back to a shorter counted description before truncating anything.
+pub fn generate_msg_with_policy(
+    changes: &[FileChange],
+    old_msg: Option<&str>,
+    policy: &Policy,
+) -> Result<String, String> {
+    let mut auto = msg_from_changes(changes)?;
+    policy.apply_to_type(&mut auto);
+
+    let message = merge_message(&auto, old_msg);
+
+    if policy.fits(&message) || changes.len() < 2 {
+        return Ok(policy.fit(&message));
+    }
+
+    let mut counted = msg_count(changes);
+    policy.apply_to_type(&mut counted);
+
+    let counted_message = merge_message(&counted, old_msg);
+
+    Ok(policy.fit(&counted_message))
+}
+
+/// Describe the action of a change as a word, used by tests and hooks.
+pub fn action_of(change: &FileChange) -> Result<Action, String> {
+    lookup_action(change.x)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::git::FileChange;
+
+    fn change(x: char, from: &str, to: &str) -> FileChange {
+        FileChange::new(x, from, to)
+    }
+
+    fn single(x: char, path: &str) -> String {
+        generate_msg(&[change(x, path, "")], None).unwrap()
+    }
+
+    #[test]
+    fn joins_strings() {
+        assert_eq!(join_with_space("abc", "def"), "abc def");
+        assert_eq!(join_with_space(" abc", "def "), "abc def");
+        assert_eq!(join_with_space("abc", ""), "abc");
+        assert_eq!(join_with_space("", "abc def"), "abc def");
+        assert_eq!(join_with_space("abc def", " abc def "), "abc def");
+        assert_eq!(join_with_colon("feat", "add thing"), "feat: add thing");
+    }
+
+    #[test]
+    fn collapses_types() {
+        assert_eq!(collapse(&[]), ConventionalType::Unknown);
+        assert_eq!(collapse(&[ConventionalType::Feat]), ConventionalType::Feat);
+        assert_eq!(
+            collapse(&[ConventionalType::Feat, ConventionalType::Feat]),
+            ConventionalType::Feat
+        );
+        assert_eq!(
+            collapse(&[ConventionalType::Feat, ConventionalType::Docs]),
+            ConventionalType::Unknown
+        );
+        assert_eq!(
+            collapse(&[ConventionalType::Feat, ConventionalType::BuildDependencies,]),
+            ConventionalType::BuildDependencies
+        );
+        assert_eq!(
+            collapse(&[ConventionalType::Docs, ConventionalType::BuildDependencies]),
+            ConventionalType::BuildDependencies
+        );
+    }
+
+    #[test]
+    fn formats_one_change() {
+        assert_eq!(single('A', "foo.txt"), "feat: create foo.txt");
+        assert_eq!(single('M', "foo.txt"), "update foo.txt");
+        assert_eq!(single('M', "README.md"), "docs: update README.md");
+        assert_eq!(single('D', "foo.txt"), "chore: delete foo.txt");
+        assert_eq!(
+            single('A', "package-lock.json"),
+            "build(deps): create package-lock.json"
+        );
+    }
+
+    #[test]
+    fn formats_two_changes() {
+        let changes = [
+            change('M', "src/main.rs", ""),
+            change('M', "src/lib.rs", ""),
+        ];
+
+        assert_eq!(
+            generate_msg(&changes, None).unwrap(),
+            "update main.rs and lib.rs"
+        );
+    }
+
+    #[test]
+    fn falls_back_to_counts_for_mixed_actions() {
+        let changes = [
+            change('M', "src/main.rs", ""),
+            change('A', "src/new.rs", ""),
+        ];
+
+        assert_eq!(
+            generate_msg(&changes, None).unwrap(),
+            "update 1 file and create 1 file"
+        );
+    }
+
+    #[test]
+    fn counts_five_or_more_files() {
+        let changes: Vec<FileChange> = (0..5)
+            .map(|index| change('M', &format!("src/file{index}.rs"), ""))
+            .collect();
+
+        assert_eq!(generate_msg(&changes, None).unwrap(), "update 5 files");
+    }
+
+    #[test]
+    fn handles_renames() {
+        assert_eq!(
+            generate_msg(&[change('R', "src/a.rs", "src/b.rs")], None).unwrap(),
+            "chore: rename a.rs to b.rs"
+        );
+    }
+
+    #[test]
+    fn splits_existing_messages() {
+        assert_eq!(
+            split_msg("feat: add thing"),
+            MsgPieces {
+                custom_prefix: String::new(),
+                type_prefix: "feat".to_string(),
+                description: "add thing".to_string(),
+            }
+        );
+        assert_eq!(
+            split_msg("JIRA-1 feat: add thing"),
+            MsgPieces {
+                custom_prefix: "JIRA-1".to_string(),
+                type_prefix: "feat".to_string(),
+                description: "add thing".to_string(),
+            }
+        );
+        assert_eq!(
+            split_msg("just a description"),
+            MsgPieces {
+                custom_prefix: String::new(),
+                type_prefix: String::new(),
+                description: "just a description".to_string(),
+            }
+        );
+        assert_eq!(
+            split_msg("feat: add: thing"),
+            MsgPieces {
+                custom_prefix: String::new(),
+                type_prefix: "feat".to_string(),
+                description: "add: thing".to_string(),
+            }
+        );
+    }
+
+    #[test]
+    fn keeps_existing_prefix_and_description() {
+        assert_eq!(
+            generate_msg(&[change('A', "foo.txt", "")], Some("feat: my words")).unwrap(),
+            "feat: create foo.txt my words"
+        );
+        assert_eq!(
+            generate_msg(&[change('M', "foo.txt", "")], Some("fix: rebuild cache")).unwrap(),
+            "fix: update foo.txt rebuild cache"
+        );
+        assert_eq!(
+            generate_msg(&[change('M', "foo.txt", "")], Some("JIRA-1 chore: tidy")).unwrap(),
+            "JIRA-1 chore: update foo.txt tidy"
+        );
+        assert_eq!(
+            generate_msg(&[change('M', "foo.txt", "")], Some("manual description")).unwrap(),
+            "update foo.txt manual description"
+        );
+    }
+
+    #[test]
+    fn treats_custom_prefix_without_type_as_the_prefix() {
+        assert_eq!(
+            generate_msg(&[change('A', "foo.txt", "")], Some("JIRA-1: words")).unwrap(),
+            "JIRA-1: create foo.txt words"
+        );
+    }
+
+    #[test]
+    fn ignores_empty_old_message() {
+        assert_eq!(
+            generate_msg(&[change('A', "foo.txt", "")], Some("")).unwrap(),
+            "feat: create foo.txt"
+        );
+    }
+
+    #[test]
+    fn exposes_actions() {
+        assert_eq!(action_of(&change('M', "a", "")).unwrap(), Action::Update);
+        assert!(action_of(&change('?', "a", "")).is_err());
+    }
+
+    #[test]
+    fn handles_zero_changes() {
+        assert_eq!(generate_msg(&[], None).unwrap(), "");
+    }
+}

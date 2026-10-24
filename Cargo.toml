@@ -1,0 +1,26 @@
+[package]
+name = "auto-commit-msg"
+version = "0.1.0"
+edition = "2024"
+description = "Generate a Conventional Commit message from Git changes and commit it"
+license = "MIT"
+repository = "https://github.com/MichaelCurrin/auto-commit-msg"
+readme = "README.md"
+default-run = "ac"
+
+[[bin]]
+name = "ac"
+path = "src/main.rs"
+
+[lib]
+name = "auto_commit_msg"
+path = "src/lib.rs"
+
+[profile.release]
+strip = true
+lto = true
+codegen-units = 1
+
+[dependencies]
+serde_json = "1.0.154"
+serde_norway = "0.9.42"
