@@ -1,0 +1,21 @@
+name,description,path
+cargo,,Cargo.lock
+cargo,,Cargo.toml
+makefile,,Makefile
+readme,ac - Rust CLI,README.md
+codedb,,codedb.snapshot
+,Docs,docs/
+ref,References,docs/ref.md
+,Src,src/
+cli,Command-line interface for `ac`.,src/cli.rs
+commitlint,Read a project's commitlint configuration.,src/commitlint.rs
+conventional,Conventional Commit type detection.,src/conventional.rs
+generate,Build the commit message from parsed file changes.,src/generate.rs
+git,Git integration.,src/git.rs
+lib,Rust rewrite of the Auto Commit Message CLI.,src/lib.rs
+main,Entry point for the `ac` command.,src/main.rs
+message,Describe file changes in words.,src/message.rs
+paths,Path helpers.,src/paths.rs
+policy,Rules which shape a generated message.,src/policy.rs
+,Tests,tests/
+cli,End-to-end tests which run the real binary against temporary Git repos.,tests/cli.rs
