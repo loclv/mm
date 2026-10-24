@@ -7,6 +7,7 @@ codedb,,codedb.snapshot
 ref,References,docs/ref.md
 usage,CLI usage and install guide,docs/usage.md
 ,Src,src/
+chat,Copy a title and transcript from an OpenCode session.,src/chat.rs
 cli,Command-line interface for `mm`.,src/cli.rs
 config,Read the project's `mm.json` configuration.,src/config.rs
 commitlint,Read a project's commitlint configuration.,src/commitlint.rs

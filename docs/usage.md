@@ -1,7 +1,9 @@
 # mm CLI usage
 
 `mm` generates a Conventional Commit message from the changes Git reports, then
-commits them. It is deterministic and path-based: no AI, no network calls.
+commits them. By default it is deterministic and path-based: no AI, no network
+calls. `--chat` instead copies the title and visible transcript from a local
+OpenCode session.
 
 ## Requirements
 
@@ -65,14 +67,16 @@ mm # generate and commit
 | `-e`, `--edit` | Open the generated message in Git's editor before committing |
 | `-p`, `--print` | Print the message and exit; never commit |
 | `-d`, `--dry-run` | Alias for `--print` |
-| `-m`, `--message <MSG>` | Merge the generated description with an existing message |
+| `-m`, `--message <MSG>` | Merge the generated description with an existing message, or override the chat subject |
+| `--chat` | Copy the current OpenCode chat title and transcript |
+| `--chat-session <ID>` | Use a specific OpenCode session; implies `--chat` |
 | `-c`, `--config <FILE>` | Use a specific commitlint config instead of searching |
 | `-s`, `--staged` | Only use staged changes; never fall back to unstaged changes |
 | `--no-verify` | Bypass Git commit hooks |
-| `-v`, `--verbose` | Print diagnostics to stderr |
+| `--verbose` | Print diagnostics to stderr |
 | `-n`, `--no-edit` | Compatibility flag; editing is already off by default |
 | `-h`, `--help` | Show help and exit |
-| `-V`, `--version` | Show the version and exit |
+| `-v`, `-V`, `--version` | Show the version and exit |
 
 ## How changes are selected
 
@@ -128,6 +132,31 @@ commitlint rules still apply.
 directory, the same way commitlint configuration is found. `--config` is
 unrelated: it overrides the commitlint configuration file.
 
+## Using an OpenCode chat
+
+OpenCode exports each session with its `opencode` CLI. When `mm` runs inside an
+OpenCode session, `OPENCODE_SESSION_ID` identifies the current chat:
+
+```sh
+mm --chat --print # preview the copied message
+mm --chat         # commit with it
+```
+
+The message is built like this:
+
+- The subject is the OpenCode session title.
+- If the title is missing or still a `New session ...` placeholder, `mm` uses
+  the first line of the latest user prompt, truncated to 72 characters.
+- The body is the visible transcript in order: user prompts and assistant text.
+  Tool calls, reasoning, system messages, and compaction summaries are left out.
+- `--chat-session <ID>` selects another session and implies `--chat`.
+- `--message` overrides the subject; the transcript remains the body.
+
+`--chat` skips path-based generation, `mm.json` formatting, and commitlint
+message shaping. It still uses the normal change selection, `--add`, `--staged`,
+`--edit`, `--no-verify`, and `--print` behavior. The `opencode` CLI must be on
+`PATH`, and the session must exist locally.
+
 ## commitlint configuration
 
 `mm` searches upward from the current directory, stopping at `$HOME`, and reads
@@ -138,8 +167,9 @@ configs are evaluated with `node`; `extends` presets additionally require
 
 Applied rules are the ones that affect the generated header: type and scope
 enums/case, type/scope presence, type/header/subject length, and trailing full
-stops. Rules for bodies, footers, and trailers are not applied because `mm` only
-writes a one-line header.
+stops. Rules for bodies, footers, and trailers are not applied to generated
+messages because `mm` writes only a one-line header. `--chat` copies a
+multi-line message and bypasses these generation rules.
 
 Use an explicit config with:
 
@@ -155,8 +185,10 @@ mm -a # include untracked files, then commit
 mm -s # commit only what is already staged
 mm -e # review the message in an editor
 mm --no-verify # bypass Git hooks
+mm --chat # copy the current OpenCode chat
+mm --chat-session ses_123 --print # preview another session
 mm -m 'JIRA-1 fix: keep this' # keep an existing prefix/description
-mm -v --print # explain what mm is doing on stderr
+mm --verbose --print # explain what mm is doing on stderr
 ```
 
 ## Output and exit status
@@ -183,6 +215,14 @@ config if you use presets.
 `mm.json: conventionalCommits must be a boolean`
 The setting must be `true` or `false`. Fix the value in `mm.json`; an invalid
 config stops `mm` before it stages or commits anything.
+
+`no OpenCode session selected`
+`--chat` needs `OPENCODE_SESSION_ID` from a running OpenCode session. Set it, or
+pass `--chat-session <ID>`.
+
+`could not run opencode session export`
+Check that the `opencode` CLI is installed and on `PATH`, and that the session ID
+exists.
 
 `mm: command not found`
 Check that `~/.cargo/bin` is in `PATH`, then start a new zsh session or run

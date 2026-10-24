@@ -7,9 +7,12 @@ Conventional Commit message from Git changes and commits in one step:
 mm
 ```
 
-No AI. The message is built from the paths and change types that Git reports,
-using the same rules as the original TypeScript `gacm` CLI. If the project has a
-commitlint configuration, its type, scope and length rules are applied too.
+By default there is no AI or network call. The message is built from the paths
+and change types that Git reports, using the same rules as the original
+TypeScript `gacm` CLI. If the project has a commitlint configuration, its type,
+scope and length rules are applied too. Inside OpenCode, `--chat` can copy the
+current session title and transcript instead; see
+[Using an OpenCode chat](#using-an-opencode-chat).
 
 ## Install
 
@@ -34,7 +37,8 @@ mm --print # Show the message without committing
 mm --add # Stage everything (including new files), then commit
 mm --edit # Open the editor before committing
 mm --staged # Use only staged changes
-mm -m 'JIRA-1: fix' # Keep an existing prefix/description
+mm --chat # Copy the current OpenCode chat title and transcript
+mm -m 'JIRA-1: fix' # Keep an existing prefix/description (or override a chat subject)
 ```
 
 Run `mm --help` for the full option list. See [docs/usage.md](docs/usage.md)
@@ -58,6 +62,26 @@ for from the current directory upwards, stopping at your home directory):
 
 Messages then use plain descriptions such as `update README.md`. An explicit
 `--message` prefix is still preserved, and commitlint rules still apply.
+
+### Using an OpenCode chat
+
+OpenCode sets `OPENCODE_SESSION_ID` for the current chat. Pass `--chat` to copy
+that session into the commit message:
+
+```sh
+mm --chat --print # preview the message
+mm --chat         # commit with it
+```
+
+- The subject is the session title.
+- If the session has no title yet, `mm` uses the first line of the latest user
+  prompt, truncated to 72 characters.
+- The body is the visible transcript: user prompts and assistant text, in order.
+  Tool calls, reasoning, system messages, and compaction summaries are omitted.
+- `--chat-session <ID>` selects another session and implies `--chat`.
+- `--message` overrides the subject; the transcript remains the body.
+- `--chat` skips path-based generation and commitlint message shaping. It
+  requires the `opencode` CLI and an existing local session.
 
 ### How changes are selected
 
@@ -105,8 +129,10 @@ Applied rules:
 | `header-full-stop`, `subject-full-stop` | Removes a forbidden trailing full stop |
 
 Rules about bodies, footers, commit trailers and the case of free-form subjects
-are not applied, because `mm` does not write those parts. An explicit
-`--message` value is treated as an override and its prefix is kept.
+are not applied to generated messages, because `mm` writes only a header. An
+explicit `--message` value is treated as an override and its prefix is kept.
+`--chat` copies its subject and body from the session and bypasses these
+generation rules.
 
 ```sh
 # .commitlintrc.yml
@@ -159,6 +185,7 @@ TypeScript files:
 | `generate.rs` | `prepareCommitMsg.ts`, `generate/parseExisting.ts` |
 | `cli.rs` | `cli/diffIndexGenerate.ts`, `cli/diffIndexGenerateCommit.ts` |
 | `config.rs` | New: reads `mm.json` settings |
+| `chat.rs` | New: copies a title and transcript from an OpenCode session |
 | `commitlint.rs` | New: finds and loads the project's commitlint configuration |
 | `policy.rs` | New: applies commitlint rules to a generated message |
 
@@ -170,6 +197,8 @@ parts differ on purpose:
 - Messages use Conventional Commits by default, so a `chore` type is added when
   no type can be inferred. Set `"conventionalCommits": false` in `mm.json` to
   restore plain descriptions.
+- `--chat` can copy the title and visible transcript from an OpenCode session
+  instead of deriving the message from file paths.
 - The commit editor is off by default; pass `--edit` to open it. `-n` and
   `--no-edit` are accepted so existing scripts keep working.
 - `--print` (`--dry-run`) prints the message and never touches the repository.

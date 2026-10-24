@@ -18,8 +18,13 @@ Unit tests live in `#[cfg(test)]` modules beside the code; end-to-end tests in
 
 ## Orientation
 
-Pipeline: `cli::run` → `Git::discover` → `config::load` → `Git::changes` →
-`commitlint::load` → `Policy` → `generate_msg_with_policy` → `Git::commit`.
+Pipeline (path-based): `cli::run` → `Git::discover` → `Git::changes` →
+`config::load` → `commitlint::load` → `Policy` → `generate_msg_with_policy` →
+`Git::commit`.
+
+Pipeline (`--chat`): `cli::run` → `Git::discover` → `Git::changes` →
+`chat::load` → `ChatMessage::message` → `Git::commit`. Chat mode does not load
+`mm.json` or commitlint.
 
 - `src/cli.rs` parses arguments by hand (no clap). A new option needs fields in
   `Options`, a `parse_args` arm, `HELP`, and tests.
@@ -35,9 +40,16 @@ Pipeline: `cli::run` → `Git::discover` → `config::load` → `Git::changes` �
 - `conventional.rs` picks types from paths, checking specific categories before
   general ones. `message.rs` owns wording, `policy.rs` translates commitlint
   rules, and `commitlint.rs` handles discovery/loading.
+- `chat.rs` shells out to `opencode session export <id>` and parses its JSON.
+  `--chat` uses the session title as the subject and user/assistant text as the
+  body; tool calls, reasoning, system messages and compaction are skipped.
+  `OPENCODE_SESSION_ID` selects the session, `--chat-session` overrides it, and
+  `--message` overrides the copied subject. If the title is absent or a
+  `New session ...` placeholder, the latest user prompt's first line is used.
 - `Policy` intentionally supports only rules that shape the single-line header
   (type/scope/length/full stop). Bodies, footers and trailers are never
-  generated.
+  generated except in `--chat` mode, which copies an existing transcript and
+  bypasses commitlint shaping.
 - Change selection is compatibility behavior: staged changes win; otherwise
   tracked worktree changes are committed with `.` as a pathspec; untracked files
   only with `--add`. `--print` must not mutate the repository (`--add` is skipped
@@ -58,6 +70,11 @@ Pipeline: `cli::run` → `Git::discover` → `config::load` → `Git::changes` �
   so a green suite does not prove those paths ran.
 - Commitlint discovery walks upward and stops at `$HOME`; JSON, YAML and
   `package.json`/`package.yaml` are parsed natively.
+- `opencode session export` truncates stdout at 256 KiB when it is a pipe.
+  `chat::export_session` redirects the child to a temporary file and removes it
+  afterward; do not replace that with `Command::output()`.
+- Chat integration tests use a fake Unix `opencode` script on `PATH`; they are
+  `#[cfg(unix)]` and do not need a live OpenCode session.
 - Output contract: generated message on stdout, errors as `Error: ...` on stderr,
   verbose diagnostics as `[mm] ...` on stderr. `--print` stdout is asserted
   exactly by integration tests.

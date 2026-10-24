@@ -69,11 +69,19 @@ impl Repo {
 
     /// Run `mm` in the repository.
     fn mm(&self, args: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_mm"))
-            .args(args)
-            .current_dir(&self.path)
-            .output()
-            .expect("run mm")
+        self.mm_with_env(args, &[])
+    }
+
+    /// Run `mm` with extra environment variables.
+    fn mm_with_env(&self, args: &[&str], envs: &[(&str, &str)]) -> Output {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_mm"));
+        command.args(args).current_dir(&self.path);
+
+        for (key, value) in envs {
+            command.env(key, value);
+        }
+
+        command.output().expect("run mm")
     }
 
     /// Number of commits on the current branch.
@@ -101,6 +109,52 @@ fn stdout(output: &Output) -> String {
 
 fn stderr(output: &Output) -> String {
     String::from_utf8_lossy(&output.stderr).trim().to_string()
+}
+
+/// Install a fake `opencode` which prints a fixed session export.
+#[cfg(unix)]
+fn fake_opencode(repo: &Repo, export: &str) -> (PathBuf, PathBuf) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let bin = repo.path().join(".fake-bin");
+    fs::create_dir_all(&bin).expect("create fake bin directory");
+
+    let fixture = repo.path().join(".chat-export.json");
+    fs::write(&fixture, export).expect("write chat export");
+
+    let script = bin.join("opencode");
+    fs::write(
+        &script,
+        "#!/bin/sh\nprintf '%s' \"$*\" > \"$MM_CHAT_ARGS\"\ncat \"$MM_CHAT_FIXTURE\"\n",
+    )
+    .expect("write fake opencode");
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755))
+        .expect("make fake opencode executable");
+
+    (bin, fixture)
+}
+
+#[cfg(unix)]
+fn chat_env(bin: &Path, fixture: &Path, args_path: &Path) -> Vec<(String, String)> {
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+
+    vec![
+        ("PATH".to_string(), path),
+        ("OPENCODE_SESSION_ID".to_string(), "ses_test".to_string()),
+        ("MM_CHAT_FIXTURE".to_string(), fixture.display().to_string()),
+        ("MM_CHAT_ARGS".to_string(), args_path.display().to_string()),
+    ]
+}
+
+#[cfg(unix)]
+fn env_refs(envs: &[(String, String)]) -> Vec<(&str, &str)> {
+    envs.iter()
+        .map(|(key, value)| (key.as_str(), value.as_str()))
+        .collect()
 }
 
 #[test]
@@ -496,4 +550,131 @@ fn reports_a_missing_explicit_configuration() {
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("commitlint config not found"));
+}
+
+#[cfg(unix)]
+const CHAT_EXPORT: &str = r#"{
+    "info": { "id": "ses_test", "title": "Add chat import" },
+    "messages": [
+        { "type": "user", "text": "Please add chat import.\nKeep the body." },
+        {
+            "type": "assistant",
+            "content": [
+                { "type": "reasoning", "text": "private reasoning" },
+                { "type": "text", "text": "Implemented the import." },
+                { "type": "tool", "name": "shell" }
+            ]
+        }
+    ]
+}"#;
+
+#[cfg(unix)]
+#[test]
+fn copies_the_current_opencode_chat_with_print() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let (bin, fixture) = fake_opencode(&repo, CHAT_EXPORT);
+    let args_path = repo.path().join(".chat-args");
+    let envs = chat_env(&bin, &fixture, &args_path);
+    let output = repo.mm_with_env(&["--chat", "--print"], &env_refs(&envs));
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "Add chat import\n\nUser:\nPlease add chat import.\nKeep the body.\n\nAssistant:\nImplemented the import."
+    );
+    assert!(!stdout(&output).contains("private reasoning"));
+    assert_eq!(
+        fs::read_to_string(&args_path).expect("read fake opencode arguments"),
+        "session export ses_test"
+    );
+    assert_eq!(repo.commit_count(), 1);
+}
+
+#[cfg(unix)]
+#[test]
+fn commits_the_chat_title_and_body() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let (bin, fixture) = fake_opencode(&repo, CHAT_EXPORT);
+    let args_path = repo.path().join(".chat-args");
+    let envs = chat_env(&bin, &fixture, &args_path);
+    let output = repo.mm_with_env(&["--chat"], &env_refs(&envs));
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(repo.commit_count(), 2);
+    assert_eq!(repo.latest_subject(), "Add chat import");
+    assert!(
+        repo.git(&["log", "-1", "--format=%b"])
+            .contains("Implemented the import.")
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn chat_session_implies_chat_and_falls_back_without_a_title() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let export = r#"{
+        "info": {},
+        "messages": [
+            { "type": "user", "text": "first request" },
+            { "type": "user", "text": "latest request\nwith detail" }
+        ]
+    }"#;
+    let (bin, fixture) = fake_opencode(&repo, export);
+    let args_path = repo.path().join(".chat-args");
+    let envs = chat_env(&bin, &fixture, &args_path);
+    let output = repo.mm_with_env(
+        &["--chat-session", "ses_other", "--print"],
+        &env_refs(&envs),
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stdout(&output).starts_with("latest request\n\nUser:\nfirst request"));
+    assert_eq!(
+        fs::read_to_string(&args_path).expect("read fake opencode arguments"),
+        "session export ses_other"
+    );
+}
+
+#[test]
+fn reports_a_missing_opencode_session() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let output = repo.mm_with_env(&["--chat", "--print"], &[("OPENCODE_SESSION_ID", "")]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("OPENCODE_SESSION_ID"));
+}
+
+#[cfg(unix)]
+#[test]
+fn chat_does_not_load_project_configuration() {
+    let repo = Repo::new();
+    repo.write("mm.json", r#"{ "conventionalCommits": "no" }"#);
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let (bin, fixture) = fake_opencode(&repo, CHAT_EXPORT);
+    let args_path = repo.path().join(".chat-args");
+    let envs = chat_env(&bin, &fixture, &args_path);
+    let output = repo.mm_with_env(
+        &["--chat", "--print", "--config", "missing.json"],
+        &env_refs(&envs),
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "Add chat import\n\nUser:\nPlease add chat import.\nKeep the body.\n\nAssistant:\nImplemented the import."
+    );
 }

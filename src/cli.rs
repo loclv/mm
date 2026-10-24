@@ -6,6 +6,7 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::chat;
 use crate::commitlint;
 use crate::config;
 use crate::constants::NO_LINES_MSG;
@@ -30,8 +31,13 @@ pub struct Options {
     pub edit: bool,
     /// Print the message and do not commit.
     pub print_only: bool,
-    /// Existing message to merge with the generated one.
+    /// Existing message to merge with the generated one, or to use as the chat
+    /// subject.
     pub message: Option<String>,
+    /// Copy the message from an OpenCode chat session.
+    pub chat: bool,
+    /// OpenCode session to copy; implies `chat`.
+    pub chat_session: Option<String>,
     /// Explicit commitlint configuration file.
     pub config: Option<PathBuf>,
     /// Never fall back to unstaged changes.
@@ -60,24 +66,31 @@ scope and length rules are applied to the generated message.
 Messages follow Conventional Commits by default. Add `mm.json` with
 {\"conventionalCommits\": false} to generate plain descriptions instead.
 
+Pass --chat to copy the title and visible transcript from the current OpenCode
+session instead; chat messages are not reshaped by commitlint. Use
+--chat-session <ID> to select a different session.
+
 Options:
   -a, --add              Stage all changes, including untracked files, first
   -e, --edit             Open the commit message in an editor before committing
   -p, --print            Print the generated message and exit without committing
   -d, --dry-run          Alias for --print
-  -m, --message <MSG>    Merge the generated description with an existing message
+  -m, --message <MSG>    Merge the generated description (or override a chat subject)
+      --chat             Copy the OpenCode chat title and transcript
+      --chat-session <ID>  Use a specific OpenCode session (implies --chat)
   -c, --config <FILE>    Use this commitlint configuration instead of searching
   -s, --staged           Only use staged changes; never fall back to unstaged
       --no-verify        Bypass Git commit hooks
-  -v, --verbose          Show what the tool is doing on stderr
+      --verbose          Show what the tool is doing on stderr
   -n, --no-edit          Accepted for compatibility; editing is off by default
   -h, --help             Show this help and exit
-  -V, --version          Show the version and exit
+  -v, -V, --version      Show the version and exit
 
 Examples:
   mm                     Generate a message and commit
   mm --print             Show the message without committing
   mm --add               Include new files, then commit
+  mm --chat --print      Preview the message copied from the current chat
   mm -m 'JIRA-1: fix'    Keep the existing prefix/description
 ";
 
@@ -91,7 +104,7 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
 
         match arg {
             "-h" | "--help" => return Ok(Command::Help),
-            "-V" | "--version" => return Ok(Command::Version),
+            "-v" | "-V" | "--version" => return Ok(Command::Version),
             "-a" | "--add" | "--all" => options.add = true,
             "-e" | "--edit" => options.edit = true,
             "-n" | "--no-edit" => options.edit = false,
@@ -106,8 +119,17 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
                 options.config = Some(PathBuf::from(value));
             }
             "-s" | "--staged" | "--staged-only" => options.staged_only = true,
+            "--chat" | "--from-chat" => options.chat = true,
+            "--chat-session" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| format!("`{arg}` requires a value"))?;
+                options.chat = true;
+                options.chat_session = Some(value.clone());
+            }
             "--no-verify" => options.no_verify = true,
-            "-v" | "--verbose" => options.verbose = true,
+            "--verbose" => options.verbose = true,
             "-m" | "--message" => {
                 index += 1;
                 let value = args
@@ -120,6 +142,10 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             }
             _ if arg.starts_with("--config=") => {
                 options.config = Some(PathBuf::from(&arg["--config=".len()..]));
+            }
+            _ if arg.starts_with("--chat-session=") => {
+                options.chat = true;
+                options.chat_session = Some(arg["--chat-session=".len()..].to_string());
             }
             _ if arg.starts_with('-') => {
                 return Err(format!("unknown option `{arg}`\n\n{HELP}"));
@@ -163,22 +189,6 @@ pub fn execute(options: &Options) -> Result<(), String> {
 
     let directory = std::env::current_dir()
         .map_err(|error| format!("could not determine the current directory: {error}"))?;
-    let settings = config::load(&directory)?;
-
-    if options.verbose {
-        match &settings.source {
-            Some(source) => eprintln!(
-                "[mm] config: {} (conventional commits: {})",
-                source.display(),
-                if settings.conventional_commits {
-                    "enabled"
-                } else {
-                    "disabled"
-                }
-            ),
-            None => eprintln!("[mm] config: none (conventional commits: enabled)"),
-        }
-    }
 
     if options.add && !options.print_only {
         git.stage_all()?;
@@ -190,15 +200,50 @@ pub fn execute(options: &Options) -> Result<(), String> {
         return Err(NO_LINES_MSG.to_string());
     }
 
-    let policy = load_policy(options, &directory)?;
-    let format = if settings.conventional_commits {
-        MessageFormat::Conventional
-    } else {
-        MessageFormat::Plain
-    };
+    let message = if options.chat {
+        let chat = chat::load(options.chat_session.as_deref(), options.verbose)?;
 
-    let message =
-        generate_msg_with_policy(&changes.files, options.message.as_deref(), &policy, format)?;
+        if options.verbose {
+            eprintln!(
+                "[mm] chat: session {} ({})",
+                chat.session_id,
+                match chat.subject_source {
+                    chat::SubjectSource::Title => "using the session title",
+                    chat::SubjectSource::LatestPrompt => {
+                        "no session title; using the latest user prompt"
+                    }
+                }
+            );
+        }
+
+        chat.message(options.message.as_deref())
+    } else {
+        let settings = config::load(&directory)?;
+
+        if options.verbose {
+            match &settings.source {
+                Some(source) => eprintln!(
+                    "[mm] config: {} (conventional commits: {})",
+                    source.display(),
+                    if settings.conventional_commits {
+                        "enabled"
+                    } else {
+                        "disabled"
+                    }
+                ),
+                None => eprintln!("[mm] config: none (conventional commits: enabled)"),
+            }
+        }
+
+        let policy = load_policy(options, &directory)?;
+        let format = if settings.conventional_commits {
+            MessageFormat::Conventional
+        } else {
+            MessageFormat::Plain
+        };
+
+        generate_msg_with_policy(&changes.files, options.message.as_deref(), &policy, format)?
+    };
 
     if message.is_empty() {
         return Err(NO_LINES_MSG.to_string());
@@ -259,7 +304,9 @@ mod tests {
     fn parses_help_and_version() {
         assert_eq!(parse_args(&args(&["-h"])).unwrap(), Command::Help);
         assert_eq!(parse_args(&args(&["--help"])).unwrap(), Command::Help);
+        assert_eq!(parse_args(&args(&["-v"])).unwrap(), Command::Version);
         assert_eq!(parse_args(&args(&["-V"])).unwrap(), Command::Version);
+        assert_eq!(parse_args(&args(&["--version"])).unwrap(), Command::Version);
     }
 
     #[test]
@@ -286,6 +333,8 @@ mod tests {
                 edit: true,
                 print_only: true,
                 message: None,
+                chat: false,
+                chat_session: None,
                 config: None,
                 staged_only: true,
                 no_verify: true,
@@ -313,6 +362,35 @@ mod tests {
     fn rejects_missing_message_value() {
         assert!(parse_args(&args(&["--message"])).is_err());
         assert!(parse_args(&args(&["--config"])).is_err());
+    }
+
+    #[test]
+    fn parses_chat_flags() {
+        assert_eq!(
+            parse_args(&args(&["--chat"])).unwrap(),
+            Command::Run(Options {
+                chat: true,
+                ..Options::default()
+            })
+        );
+
+        let with_space = parse_args(&args(&["--chat-session", "ses_test"])).unwrap();
+        let with_equals = parse_args(&args(&["--chat-session=ses_test"])).unwrap();
+
+        assert_eq!(with_space, with_equals);
+        assert_eq!(
+            with_space,
+            Command::Run(Options {
+                chat: true,
+                chat_session: Some("ses_test".to_string()),
+                ..Options::default()
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_a_missing_chat_session() {
+        assert!(parse_args(&args(&["--chat-session"])).is_err());
     }
 
     #[test]
