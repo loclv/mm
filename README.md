@@ -1,10 +1,10 @@
-# ac - Rust CLI
+# mm - Rust CLI
 
-"ac" - "auto commit", is a Rust rewrite of the Auto Commit Message CLI logic. It generates a
+`mm` is a Rust rewrite of the Auto Commit Message CLI logic. It generates a
 Conventional Commit message from Git changes and commits in one step:
 
 ```sh
-ac
+mm
 ```
 
 No AI. The message is built from the paths and change types that Git reports,
@@ -19,25 +19,26 @@ From the repository root:
 cargo install --path .
 ```
 
-The binary is called `ac`. To build without installing:
+The binary is called `mm`. To build without installing:
 
 ```sh
 cargo build --release
-./target/release/ac --help
+./target/release/mm --help
 ```
 
 ## Usage
 
 ```bash
-ac # Generate a message and commit
-ac --print # Show the message without committing
-ac --add # Stage everything (including new files), then commit
-ac --edit # Open the editor before committing
-ac --staged # Use only staged changes
-ac -m 'JIRA-1: fix' # Keep an existing prefix/description
+mm # Generate a message and commit
+mm --print # Show the message without committing
+mm --add # Stage everything (including new files), then commit
+mm --edit # Open the editor before committing
+mm --staged # Use only staged changes
+mm -m 'JIRA-1: fix' # Keep an existing prefix/description
 ```
 
-Run `ac --help` for the full option list.
+Run `mm --help` for the full option list. See [docs/usage.md](docs/usage.md)
+for macOS/zsh installation, the complete command reference, and troubleshooting.
 
 ### How changes are selected
 
@@ -51,7 +52,7 @@ the message without changing the repository.
 
 ### commitlint configuration
 
-`ac` reads the project's commitlint configuration and applies the rules which
+`mm` reads the project's commitlint configuration and applies the rules which
 affect message generation. All formats supported by commitlint are handled:
 
 - `package.json` or `package.yaml` with a `commitlint` field
@@ -63,7 +64,7 @@ affect message generation. All formats supported by commitlint are handled:
 
 The file is searched for from the current directory upwards, stopping at your
 home directory, in the same order as commitlint (cosmiconfig). Use
-`ac --config path/to/file` to point at a specific file.
+`mm --config path/to/file` to point at a specific file.
 
 JSON and YAML configs are parsed natively. JavaScript and TypeScript configs are
 evaluated with Node, and `extends` presets are resolved with `@commitlint/load`
@@ -85,7 +86,7 @@ Applied rules:
 | `header-full-stop`, `subject-full-stop` | Removes a forbidden trailing full stop |
 
 Rules about bodies, footers, commit trailers and the case of free-form subjects
-are not applied, because `ac` does not write those parts. An explicit
+are not applied, because `mm` does not write those parts. An explicit
 `--message` value is treated as an override and its prefix is kept.
 
 ```sh
@@ -93,7 +94,7 @@ are not applied, because `ac` does not write those parts. An explicit
 # rules:
 # type-enum: [2, always, [feat, fix, chore]]
 # header-max-length: [2, always, 72]
-ac --print
+mm --print
 ```
 
 ### Message rules
