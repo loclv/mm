@@ -8,23 +8,22 @@ ac
 ```
 
 No AI. The message is built from the paths and change types that Git reports,
-using the same rules as the TypeScript implementation in the parent directory.
-If the project has a commitlint configuration, its type, scope and length rules
-are applied too.
+using the same rules as the original TypeScript `gacm` CLI. If the project has a
+commitlint configuration, its type, scope and length rules are applied too.
 
 ## Install
 
 From the repository root:
 
 ```sh
-cargo install --path rust
+cargo install --path .
 ```
 
 The binary is called `ac`. To build without installing:
 
 ```sh
-cargo build --release --manifest-path rust/Cargo.toml
-./rust/target/release/ac --help
+cargo build --release
+./target/release/ac --help
 ```
 
 ## Usage
@@ -113,7 +112,12 @@ ac --print
 ## Development
 
 ```sh
-cd rust
+./test.sh
+```
+
+Or run individual commands:
+
+```sh
 cargo test
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
