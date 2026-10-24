@@ -8,6 +8,18 @@ use crate::git::FileChange;
 use crate::message::{count_files_desc, named_files_desc, one_change};
 use crate::policy::Policy;
 
+/// Type used when the Conventional Commit type cannot be inferred.
+const DEFAULT_TYPE: &str = "chore";
+
+/// How a generated message should be formatted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MessageFormat {
+    /// `type: description`, as required by Conventional Commits.
+    Conventional,
+    /// The description only, without a generated type.
+    Plain,
+}
+
 /// A Conventional Commit prefix plus a description.
 ///
 /// The prefix is a string rather than an enum so that custom types from a
@@ -90,9 +102,22 @@ pub fn msg_named(changes: &[FileChange]) -> Result<ConvCommitMsg, String> {
 }
 
 /// Generate the description for many changes using counts.
+///
+/// The type is inferred by collapsing the types of all changes. It is left
+/// empty when they differ or cannot be determined; the formatter supplies a
+/// fallback when Conventional Commits is enabled.
 pub fn msg_count(changes: &[FileChange]) -> ConvCommitMsg {
+    let types: Vec<ConventionalType> = changes
+        .iter()
+        .map(|change| {
+            lookup_action(change.x)
+                .map(|action| get_convention_type(action, &change.from))
+                .unwrap_or(ConventionalType::Unknown)
+        })
+        .collect();
+
     ConvCommitMsg {
-        type_prefix: String::new(),
+        type_prefix: collapse(&types).as_str().to_string(),
         description: count_files_desc(changes),
     }
 }
@@ -182,25 +207,49 @@ fn merge_message(auto: &ConvCommitMsg, old_msg: Option<&str>) -> String {
     }
 }
 
-/// Generate a message, optionally reusing an existing one.
+/// Apply the requested message format before commitlint rules are applied.
+fn apply_format(message: &mut ConvCommitMsg, format: MessageFormat) {
+    if message.description.is_empty() {
+        return;
+    }
+
+    match format {
+        MessageFormat::Conventional => {
+            if message.type_prefix.is_empty() {
+                message.type_prefix = DEFAULT_TYPE.to_string();
+            }
+        }
+        MessageFormat::Plain => message.type_prefix.clear(),
+    }
+}
+
+/// Generate a Conventional Commit message, optionally reusing an existing one.
 ///
 /// An existing type prefix wins over the generated one, and any existing
 /// description is kept after the generated description.
 pub fn generate_msg(changes: &[FileChange], old_msg: Option<&str>) -> Result<String, String> {
-    generate_msg_with_policy(changes, old_msg, &Policy::default())
+    generate_msg_with_policy(
+        changes,
+        old_msg,
+        &Policy::default(),
+        MessageFormat::Conventional,
+    )
 }
 
-/// Generate a message which follows a commitlint [`Policy`].
+/// Generate a message which follows a [`Policy`].
 ///
-/// The policy can restrict types and scopes, change their case, and limit the
+/// The format controls whether a Conventional Commit type is included. The
+/// policy can restrict types and scopes, change their case, and limit the
 /// header length. When a long named-file message does not fit, the generator
 /// falls back to a shorter counted description before truncating anything.
 pub fn generate_msg_with_policy(
     changes: &[FileChange],
     old_msg: Option<&str>,
     policy: &Policy,
+    format: MessageFormat,
 ) -> Result<String, String> {
     let mut auto = msg_from_changes(changes)?;
+    apply_format(&mut auto, format);
     policy.apply_to_type(&mut auto);
 
     let message = merge_message(&auto, old_msg);
@@ -210,6 +259,7 @@ pub fn generate_msg_with_policy(
     }
 
     let mut counted = msg_count(changes);
+    apply_format(&mut counted, format);
     policy.apply_to_type(&mut counted);
 
     let counted_message = merge_message(&counted, old_msg);
@@ -233,6 +283,11 @@ mod tests {
 
     fn single(x: char, path: &str) -> String {
         generate_msg(&[change(x, path, "")], None).unwrap()
+    }
+
+    fn plain(changes: &[FileChange], old_msg: Option<&str>) -> String {
+        generate_msg_with_policy(changes, old_msg, &Policy::default(), MessageFormat::Plain)
+            .unwrap()
     }
 
     #[test]
@@ -270,7 +325,7 @@ mod tests {
     #[test]
     fn formats_one_change() {
         assert_eq!(single('A', "foo.txt"), "feat: create foo.txt");
-        assert_eq!(single('M', "foo.txt"), "update foo.txt");
+        assert_eq!(single('M', "foo.txt"), "chore: update foo.txt");
         assert_eq!(single('M', "README.md"), "docs: update README.md");
         assert_eq!(single('D', "foo.txt"), "chore: delete foo.txt");
         assert_eq!(
@@ -288,7 +343,7 @@ mod tests {
 
         assert_eq!(
             generate_msg(&changes, None).unwrap(),
-            "update main.rs and lib.rs"
+            "chore: update main.rs and lib.rs"
         );
     }
 
@@ -301,7 +356,7 @@ mod tests {
 
         assert_eq!(
             generate_msg(&changes, None).unwrap(),
-            "update 1 file and create 1 file"
+            "chore: update 1 file and create 1 file"
         );
     }
 
@@ -311,7 +366,44 @@ mod tests {
             .map(|index| change('M', &format!("src/file{index}.rs"), ""))
             .collect();
 
-        assert_eq!(generate_msg(&changes, None).unwrap(), "update 5 files");
+        assert_eq!(
+            generate_msg(&changes, None).unwrap(),
+            "chore: update 5 files"
+        );
+    }
+
+    #[test]
+    fn infers_a_type_for_counted_messages() {
+        let created: Vec<FileChange> = (0..5)
+            .map(|index| change('A', &format!("src/file{index}.rs"), ""))
+            .collect();
+        let docs: Vec<FileChange> = (0..5)
+            .map(|index| change('M', &format!("docs/doc{index}.md"), ""))
+            .collect();
+
+        assert_eq!(
+            generate_msg(&created, None).unwrap(),
+            "feat: create 5 files"
+        );
+        assert_eq!(generate_msg(&docs, None).unwrap(), "docs: update 5 files");
+    }
+
+    #[test]
+    fn formats_plain_messages_without_a_type() {
+        assert_eq!(plain(&[change('A', "foo.txt", "")], None), "create foo.txt");
+        assert_eq!(plain(&[change('M', "foo.txt", "")], None), "update foo.txt");
+        assert_eq!(
+            plain(&[change('M', "README.md", "")], None),
+            "update README.md"
+        );
+    }
+
+    #[test]
+    fn keeps_an_explicit_prefix_in_plain_mode() {
+        assert_eq!(
+            plain(&[change('M', "foo.txt", "")], Some("fix: rebuild cache")),
+            "fix: update foo.txt rebuild cache"
+        );
     }
 
     #[test]
@@ -374,7 +466,7 @@ mod tests {
         );
         assert_eq!(
             generate_msg(&[change('M', "foo.txt", "")], Some("manual description")).unwrap(),
-            "update foo.txt manual description"
+            "chore: update foo.txt manual description"
         );
     }
 

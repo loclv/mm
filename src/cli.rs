@@ -4,11 +4,12 @@
 //! generates a Conventional Commit message, and commits. Use `--print` to only
 //! show the message.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::commitlint;
+use crate::config;
 use crate::constants::NO_LINES_MSG;
-use crate::generate::generate_msg_with_policy;
+use crate::generate::{MessageFormat, generate_msg_with_policy};
 use crate::git::{CommitOptions, Git};
 use crate::policy::Policy;
 
@@ -55,6 +56,9 @@ are ignored unless you pass --add.
 A commitlint configuration is detected automatically (JSON, YAML, JavaScript,
 TypeScript, or a `commitlint` field in package.json/package.yaml) and its type,
 scope and length rules are applied to the generated message.
+
+Messages follow Conventional Commits by default. Add `mm.json` with
+{\"conventionalCommits\": false} to generate plain descriptions instead.
 
 Options:
   -a, --add              Stage all changes, including untracked files, first
@@ -157,6 +161,25 @@ pub fn execute(options: &Options) -> Result<(), String> {
         eprintln!("[mm] repository: {}", git.root().display());
     }
 
+    let directory = std::env::current_dir()
+        .map_err(|error| format!("could not determine the current directory: {error}"))?;
+    let settings = config::load(&directory)?;
+
+    if options.verbose {
+        match &settings.source {
+            Some(source) => eprintln!(
+                "[mm] config: {} (conventional commits: {})",
+                source.display(),
+                if settings.conventional_commits {
+                    "enabled"
+                } else {
+                    "disabled"
+                }
+            ),
+            None => eprintln!("[mm] config: none (conventional commits: enabled)"),
+        }
+    }
+
     if options.add && !options.print_only {
         git.stage_all()?;
     }
@@ -167,9 +190,15 @@ pub fn execute(options: &Options) -> Result<(), String> {
         return Err(NO_LINES_MSG.to_string());
     }
 
-    let policy = load_policy(options)?;
+    let policy = load_policy(options, &directory)?;
+    let format = if settings.conventional_commits {
+        MessageFormat::Conventional
+    } else {
+        MessageFormat::Plain
+    };
 
-    let message = generate_msg_with_policy(&changes.files, options.message.as_deref(), &policy)?;
+    let message =
+        generate_msg_with_policy(&changes.files, options.message.as_deref(), &policy, format)?;
 
     if message.is_empty() {
         return Err(NO_LINES_MSG.to_string());
@@ -193,11 +222,8 @@ pub fn execute(options: &Options) -> Result<(), String> {
 }
 
 /// Read the project's commitlint configuration, reporting any warnings.
-fn load_policy(options: &Options) -> Result<Policy, String> {
-    let directory = std::env::current_dir()
-        .map_err(|error| format!("could not determine the current directory: {error}"))?;
-
-    let config = commitlint::load(&directory, options.config.as_deref())?;
+fn load_policy(options: &Options, directory: &Path) -> Result<Policy, String> {
+    let config = commitlint::load(directory, options.config.as_deref())?;
 
     let Some(config) = config else {
         return Ok(Policy::default());

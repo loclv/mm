@@ -89,18 +89,44 @@ untracked files exist, it reports that it cannot find changes.
 
 ## Generated messages
 
+Generated headers follow the
+[Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/#specification)
+by default:
+
 - One file: `feat: create foo.rs`, `docs: update README.md`,
   `chore: delete old.txt`, or `chore: rename a.rs to b.rs`.
 - Two to four files: names are listed when the actions match, for example
-  `update main.rs and lib.rs`; mixed actions fall back to counts.
-- Five or more files: counts are used, for example `update 5 files`.
+  `chore: update main.rs and lib.rs`; mixed actions fall back to counts.
+- Five or more files: counts are used, for example `chore: update 5 files`.
 - Types come from the path: docs, tests, CI, dependencies (`build(deps)`), build
   files, and configuration (`chore`).
 - A new file with no other match is a `feat`.
 - Renames, moves, and deletions are `chore`.
+- When no type can be inferred, or the changed paths disagree, the type is
+  `chore`.
 
 An existing type prefix supplied with `--message` wins over the generated type;
 an existing description is appended after the generated description.
+
+### Disabling the convention with `mm.json`
+
+Add `mm.json` to the project (or a parent directory up to `$HOME`) to disable the
+Conventional Commits format:
+
+```json
+{
+  "conventionalCommits": false
+}
+```
+
+`mm` then generates plain descriptions such as `update README.md`; it does not
+add a `chore` fallback or any `type:` prefix. The short alias `"conventional"`
+is also accepted. An explicit `--message` prefix is still preserved, and
+commitlint rules still apply.
+
+`mm.json` is searched upward from the current directory, stopping at your home
+directory, the same way commitlint configuration is found. `--config` is
+unrelated: it overrides the commitlint configuration file.
 
 ## commitlint configuration
 
@@ -153,6 +179,10 @@ Run `mm` inside a Git work tree.
 A JavaScript/TypeScript config is ignored or warns about `extends`
 Install Node.js, and install `@commitlint/load` in the project that owns the
 config if you use presets.
+
+`mm.json: conventionalCommits must be a boolean`
+The setting must be `true` or `false`. Fix the value in `mm.json`; an invalid
+config stops `mm` before it stages or commits anything.
 
 `mm: command not found`
 Check that `~/.cargo/bin` is in `PATH`, then start a new zsh session or run

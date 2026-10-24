@@ -1,13 +1,14 @@
 name,description,path
 cargo,,Cargo.lock
 cargo,,Cargo.toml
-makefile,,Makefile
 readme,mm - Rust CLI,README.md
 codedb,,codedb.snapshot
 ,Docs,docs/
 ref,References,docs/ref.md
+usage,CLI usage and install guide,docs/usage.md
 ,Src,src/
 cli,Command-line interface for `mm`.,src/cli.rs
+config,Read the project's `mm.json` configuration.,src/config.rs
 commitlint,Read a project's commitlint configuration.,src/commitlint.rs
 conventional,Conventional Commit type detection.,src/conventional.rs
 generate,Build the commit message from parsed file changes.,src/generate.rs

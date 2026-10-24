@@ -40,6 +40,25 @@ mm -m 'JIRA-1: fix' # Keep an existing prefix/description
 Run `mm --help` for the full option list. See [docs/usage.md](docs/usage.md)
 for macOS/zsh installation, the complete command reference, and troubleshooting.
 
+### Message format
+
+Generated headers follow the
+[Conventional Commits specification](https://www.conventionalcommits.org/en/v1.0.0/#specification)
+by default, for example `feat: create foo.rs` or `chore: update 5 files`. When
+no type can be inferred, `mm` uses `chore`.
+
+To disable the convention, add `mm.json` in the project (the file is searched
+for from the current directory upwards, stopping at your home directory):
+
+```json
+{
+  "conventionalCommits": false
+}
+```
+
+Messages then use plain descriptions such as `update README.md`. An explicit
+`--message` prefix is still preserved, and commitlint rules still apply.
+
 ### How changes are selected
 
 1. If anything is staged, only staged changes are used.
@@ -101,8 +120,11 @@ mm --print
 
 - One file: `feat: create foo.rs`, `docs: update README.md`,
   `chore: delete old.txt`, `chore: rename a.rs to b.rs`
-- Two to four files: names are listed, e.g. `update main.rs and lib.rs`
+- Two to four files: names are listed, e.g. `update main.rs and lib.rs`; mixed
+  actions fall back to counts
 - Five or more files: counts are used, e.g. `update 5 files`
+- The type is inferred from the changed paths. When changes disagree or a type
+  cannot be determined, the default is `chore`
 - Prefixes come from the path: docs (`README`, `docs/`, `.rst`), tests, CI,
   dependencies (`build(deps)`), build files, and configuration (`chore`)
 - A new file with no other match is a `feat`
@@ -136,14 +158,18 @@ TypeScript files:
 | `message.rs` | `generate/action.ts`, `generate/count.ts`, `generate/message.ts` |
 | `generate.rs` | `prepareCommitMsg.ts`, `generate/parseExisting.ts` |
 | `cli.rs` | `cli/diffIndexGenerate.ts`, `cli/diffIndexGenerateCommit.ts` |
+| `config.rs` | New: reads `mm.json` settings |
 | `commitlint.rs` | New: finds and loads the project's commitlint configuration |
 | `policy.rs` | New: applies commitlint rules to a generated message |
 
 ## Differences from `gacm`
 
-The selection of changes and the message rules match `gacm`. These parts differ
-on purpose:
+The selection of changes and the path-based message rules follow `gacm`. These
+parts differ on purpose:
 
+- Messages use Conventional Commits by default, so a `chore` type is added when
+  no type can be inferred. Set `"conventionalCommits": false` in `mm.json` to
+  restore plain descriptions.
 - The commit editor is off by default; pass `--edit` to open it. `-n` and
   `--no-edit` are accepted so existing scripts keep working.
 - `--print` (`--dry-run`) prints the message and never touches the repository.

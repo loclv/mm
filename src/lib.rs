@@ -8,10 +8,12 @@
 //! - [`conventional`] picks the Conventional Commit type for a file.
 //! - [`message`] describes one file change or a group of changes.
 //! - [`generate`] assembles the final commit message.
+//! - [`config`] reads the optional `mm.json` project settings.
 //! - [`cli`] implements the `mm` command-line interface.
 
 pub mod cli;
 pub mod commitlint;
+pub mod config;
 pub mod conventional;
 pub mod generate;
 pub mod git;

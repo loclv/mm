@@ -349,7 +349,69 @@ fn honours_header_max_length() {
     let output = repo.mm(&["--print"]);
 
     assert!(output.status.success(), "{}", stderr(&output));
-    assert_eq!(stdout(&output), "update 3 files");
+    assert_eq!(stdout(&output), "chore: update 3 f...");
+}
+
+#[test]
+fn uses_conventional_commits_for_counted_changes() {
+    let repo = Repo::new();
+
+    for name in ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"] {
+        repo.write(name, "initial\n");
+        repo.git(&["add", name]);
+    }
+    repo.git(&["commit", "-q", "-m", "chore: add files"]);
+
+    for name in ["a.txt", "b.txt", "c.txt", "d.txt", "e.txt"] {
+        repo.write(name, "changed\n");
+        repo.git(&["add", name]);
+    }
+
+    let output = repo.mm(&["--print"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "chore: update 5 files");
+}
+
+#[test]
+fn disables_conventional_commits_with_mm_json() {
+    let repo = Repo::new();
+    repo.write("mm.json", r#"{ "conventionalCommits": false }"#);
+    repo.write("README.md", "# test\n\nMore docs.\n");
+
+    let output = repo.mm(&["--print"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "update README.md");
+}
+
+#[test]
+fn finds_mm_json_from_a_subdirectory() {
+    let repo = Repo::new();
+    repo.write("mm.json", r#"{ "conventionalCommits": false }"#);
+    repo.write("src/deep/foo.txt", "new\n");
+    repo.git(&["add", "src/deep/foo.txt"]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_mm"))
+        .args(["--print"])
+        .current_dir(repo.path().join("src/deep"))
+        .output()
+        .expect("run mm");
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "create foo.txt");
+}
+
+#[test]
+fn rejects_an_invalid_mm_json_setting() {
+    let repo = Repo::new();
+    repo.write("mm.json", r#"{ "conventionalCommits": "no" }"#);
+    repo.write("README.md", "# test\n\nMore docs.\n");
+
+    let output = repo.mm(&["--print"]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("conventionalCommits"));
 }
 
 #[test]

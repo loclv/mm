@@ -18,8 +18,8 @@ Unit tests live in `#[cfg(test)]` modules beside the code; end-to-end tests in
 
 ## Orientation
 
-Pipeline: `cli::run` → `Git::discover` → `Git::changes` → `commitlint::load` →
-`Policy` → `generate_msg_with_policy` → `Git::commit`.
+Pipeline: `cli::run` → `Git::discover` → `config::load` → `Git::changes` →
+`commitlint::load` → `Policy` → `generate_msg_with_policy` → `Git::commit`.
 
 - `src/cli.rs` parses arguments by hand (no clap). A new option needs fields in
   `Options`, a `parse_args` arm, `HELP`, and tests.
@@ -27,6 +27,11 @@ Pipeline: `cli::run` → `Git::discover` → `Git::changes` → `commitlint::loa
   original TypeScript implementation (mapping table in README).
 - User-facing CLI reference is `docs/usage.md`; keep its option table and
   behavior in sync with `HELP` in `src/cli.rs`.
+- `config.rs` reads `mm.json` from the current directory upward, stopping at
+  `$HOME`. `conventionalCommits` defaults to `true`; setting it to `false`
+  switches generation to plain descriptions. `MessageFormat` in `generate.rs`
+  implements that switch, with `chore` as the fallback type for unknown or mixed
+  paths.
 - `conventional.rs` picks types from paths, checking specific categories before
   general ones. `message.rs` owns wording, `policy.rs` translates commitlint
   rules, and `commitlint.rs` handles discovery/loading.
