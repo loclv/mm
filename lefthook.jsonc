@@ -1,0 +1,33 @@
+{
+	// Schema validation for Lefthook (https://lefthook.dev/)
+	"$schema": "https://json.schemastore.org/lefthook.json",
+	// Lint and format staged files before committing
+	"pre-commit": {
+		"parallel": true,
+		"commands": {
+			"rumdl": {
+				"glob": "*.md",
+				"run": "rumdl fmt {staged_files}",
+				"stage_fixed": true
+			}
+		}
+	},
+	// Validate commit message convention (e.g., feat: ..., fix: ...)
+	"commit-msg": {
+		"commands": {
+			"commitlint": {
+				// You can install commitlint with:
+				// - <https://github.com/quinnjr/cargo-commitlint>
+				// - `cargo install cargo-commitlint`
+				"run": "cargo commitlint check --edit {1}"
+			}
+		}
+	},
+	"pre-push": {
+		"commands": {
+			"clippy": {
+				"run": "cargo clippy --all-targets -- -D warnings"
+			}
+		}
+	}
+}
