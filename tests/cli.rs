@@ -482,6 +482,63 @@ fn rejects_an_invalid_mm_json_setting() {
 }
 
 #[test]
+fn mm_json_auto_add_commits_untracked_files_when_nothing_is_staged() {
+    let repo = Repo::new();
+    repo.write("mm.json", r#"{ "autoAdd": true }"#);
+    repo.write("notes.txt", "hello\n");
+
+    let output = repo.mm(&[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(repo.commit_count(), 2);
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn mm_json_auto_add_preserves_staged_changes_when_some_are_staged() {
+    let repo = Repo::new();
+    repo.write("mm.json", r#"{ "autoAdd": true }"#);
+    repo.git(&["add", "mm.json"]);
+    repo.write("staged.txt", "staged content\n");
+    repo.git(&["add", "staged.txt"]);
+    repo.write("untracked.txt", "still untracked\n");
+
+    let output = repo.mm(&[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        repo.latest_subject(),
+        "chore: create mm.json and staged.txt"
+    );
+    let status = repo.git(&["status", "--porcelain"]);
+    assert!(status.contains("?? untracked.txt"), "status: {status}");
+}
+
+#[test]
+fn mm_json_auto_add_respects_staged_only_flag() {
+    let repo = Repo::new();
+    repo.write("mm.json", r#"{ "autoAdd": true }"#);
+    repo.write("notes.txt", "hello\n");
+
+    let output = repo.mm(&["--staged"]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("no changes files"));
+}
+
+#[test]
+fn mm_json_auto_add_disabled_by_default() {
+    let repo = Repo::new();
+    repo.write("mm.json", r#"{ "autoAdd": false }"#);
+    repo.write("notes.txt", "hello\n");
+
+    let output = repo.mm(&[]);
+
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("no changes files"));
+}
+
+#[test]
 fn drops_a_scope_which_is_not_allowed() {
     let repo = Repo::new();
     repo.write(

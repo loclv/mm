@@ -1,8 +1,10 @@
 //! Read the project's `mm.json` configuration.
 //!
-//! The only setting currently supported is `conventionalCommits`. It defaults
-//! to `true`, so generated messages follow the Conventional Commits
-//! specification unless a project explicitly opts out.
+//! Supported settings:
+//! - `conventionalCommits` (boolean, default `true`): generated messages
+//!   follow Conventional Commits unless disabled.
+//! - `autoAdd` (boolean, default `false`): automatically stages all changes
+//!   (including untracked files) when nothing is staged.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -17,6 +19,8 @@ pub const FILE_NAME: &str = "mm.json";
 pub struct Config {
     /// Whether generated messages use the Conventional Commits format.
     pub conventional_commits: bool,
+    /// Whether to automatically stage all changes when nothing is staged.
+    pub auto_add: bool,
     /// File the configuration came from, if any.
     pub source: Option<PathBuf>,
 }
@@ -25,6 +29,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             conventional_commits: true,
+            auto_add: false,
             source: None,
         }
     }
@@ -48,9 +53,11 @@ pub fn load(start: &Path) -> Result<Config, String> {
         .ok_or_else(|| format!("{} must contain a JSON object", path.display()))?;
 
     let conventional_commits = read_conventional_commits(object, &path)?;
+    let auto_add = read_auto_add(object, &path)?;
 
     Ok(Config {
         conventional_commits,
+        auto_add,
         source: Some(path),
     })
 }
@@ -93,6 +100,30 @@ fn read_conventional_commits(
     }
 
     Ok(true)
+}
+
+/// Read the auto-add switch, accepting aliases.
+fn read_auto_add(object: &serde_json::Map<String, Value>, path: &Path) -> Result<bool, String> {
+    for key in [
+        "autoAdd",
+        "auto_add",
+        "autoCommit",
+        "auto_commit",
+        "autoStage",
+        "auto_stage",
+        "add",
+    ] {
+        let Some(value) = object.get(key) else {
+            continue;
+        };
+
+        return match value {
+            Value::Bool(value) => Ok(*value),
+            _ => Err(format!("{}: `{key}` must be a boolean", path.display())),
+        };
+    }
+
+    Ok(false)
 }
 
 #[cfg(test)]
@@ -145,7 +176,48 @@ mod tests {
         let config = load(dir.path()).unwrap();
 
         assert!(config.conventional_commits);
+        assert!(!config.auto_add);
         assert_eq!(config.source, None);
+    }
+
+    #[test]
+    fn reads_auto_add_setting() {
+        let dir = TempDir::new();
+        dir.write(FILE_NAME, r#"{ "autoAdd": true }"#);
+
+        let config = load(dir.path()).unwrap();
+
+        assert!(config.auto_add);
+        assert!(config.conventional_commits);
+        assert_eq!(config.source, Some(dir.path().join(FILE_NAME)));
+    }
+
+    #[test]
+    fn accepts_auto_add_aliases() {
+        for alias in [
+            "add",
+            "autoCommit",
+            "autoStage",
+            "auto_add",
+            "auto_commit",
+            "auto_stage",
+        ] {
+            let dir = TempDir::new();
+            dir.write(FILE_NAME, &format!(r#"{{ "{alias}": true }}"#));
+
+            assert!(load(dir.path()).unwrap().auto_add);
+        }
+    }
+
+    #[test]
+    fn rejects_a_non_boolean_auto_add_setting() {
+        let dir = TempDir::new();
+        dir.write(FILE_NAME, r#"{ "autoAdd": "yes" }"#);
+
+        let error = load(dir.path()).unwrap_err();
+
+        assert!(error.contains("autoAdd"));
+        assert!(error.contains("boolean"));
     }
 
     #[test]

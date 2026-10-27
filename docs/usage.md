@@ -118,10 +118,11 @@ by default:
 An existing type prefix supplied with `--message` wins over the generated type;
 an existing description is appended after the generated description.
 
-### Disabling the convention with `mm.json`
+### Configuration with `mm.json`
 
-Add `mm.json` to the project (or a parent directory up to `$HOME`) to disable the
-Conventional Commits format:
+Add `mm.json` to the project (or a parent directory up to `$HOME`) to configure project options:
+
+- `conventionalCommits` (boolean, default: `true`): set to `false` (or alias `"conventional"`) to generate plain descriptions without a Conventional Commit type prefix:
 
 ```json
 {
@@ -129,9 +130,16 @@ Conventional Commits format:
 }
 ```
 
-`mm` then generates plain descriptions such as `update README.md`; it does not
-add a `chore` fallback or any `type:` prefix. The short alias `"conventional"`
-is also accepted. An explicit `--message` prefix is still preserved, and
+- `autoAdd` (boolean, default: `false`): set to `true` (aliases `"add"`, `"autoCommit"`, `"autoStage"`) to automatically stage and commit all changes (including untracked files) when running `mm` without any staged changes. If files are already staged, `mm` commits only the staged changes and leaves unstaged/untracked files untouched:
+
+```json
+{
+  "autoAdd": true
+}
+```
+
+`mm` then generates plain descriptions such as `update README.md` when Conventional Commits are disabled; it does not
+add a `chore` fallback or any `type:` prefix. An explicit `--message` prefix is still preserved, and
 commitlint rules still apply.
 
 `mm.json` is searched upward from the current directory, stopping at your home

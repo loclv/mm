@@ -70,7 +70,8 @@ TypeScript, or a `commitlint` field in package.json/package.yaml) and its type,
 scope and length rules are applied to the generated message.
 
 Messages follow Conventional Commits by default. Add `mm.json` with
-{\"conventionalCommits\": false} to generate plain descriptions instead.
+{\"conventionalCommits\": false} to generate plain descriptions instead, or
+{\"autoAdd\": true} to automatically stage all changes when none are staged.
 
 Pass --chat to copy the title and last assistant message from the current
 OpenCode, Antigravity, Claude Code, or Codex session instead; chat messages are not
@@ -262,11 +263,30 @@ pub fn execute(options: &Options) -> Result<(), String> {
     let directory = std::env::current_dir()
         .map_err(|error| format!("could not determine the current directory: {error}"))?;
 
+    let settings = if options.chat {
+        config::load(&directory).unwrap_or_default()
+    } else {
+        config::load(&directory)?
+    };
+
     if options.add && !options.print_only {
         git.stage_all()?;
     }
 
-    let changes = git.changes(options.staged_only)?;
+    let mut changes = git.changes(options.staged_only)?;
+
+    if !options.add
+        && settings.auto_add
+        && !options.staged_only
+        && !options.print_only
+        && !changes.staged
+    {
+        if options.verbose {
+            eprintln!("[mm] auto add: no staged changes found; staging all changes");
+        }
+        git.stage_all()?;
+        changes = git.changes(options.staged_only)?;
+    }
 
     if changes.files.is_empty() {
         return Err(NO_LINES_MSG.to_string());
@@ -285,7 +305,6 @@ pub fn execute(options: &Options) -> Result<(), String> {
         match chat_result {
             Ok(chat) => {
                 let policy = load_policy(options, &directory).unwrap_or_default();
-                let settings = config::load(&directory).unwrap_or_default();
                 let initial_subject = options
                     .message
                     .as_deref()
@@ -313,7 +332,7 @@ pub fn execute(options: &Options) -> Result<(), String> {
                             chat.session_id
                         );
                     }
-                    generate_auto_message(options, &directory, &changes.files)?
+                    generate_auto_message(options, &directory, &changes.files, &settings)?
                 } else {
                     if options.verbose {
                         eprintln!(
@@ -339,11 +358,11 @@ pub fn execute(options: &Options) -> Result<(), String> {
                         "[mm] chat: failed to copy log from AI Agent ({error}); falling back to auto commit message"
                     );
                 }
-                generate_auto_message(options, &directory, &changes.files)?
+                generate_auto_message(options, &directory, &changes.files, &settings)?
             }
         }
     } else {
-        generate_auto_message(options, &directory, &changes.files)?
+        generate_auto_message(options, &directory, &changes.files, &settings)?
     };
 
     if message.is_empty() {
@@ -372,9 +391,8 @@ fn generate_auto_message(
     options: &Options,
     directory: &Path,
     files: &[crate::git::FileChange],
+    settings: &config::Config,
 ) -> Result<String, String> {
-    let settings = config::load(directory)?;
-
     if options.verbose {
         match &settings.source {
             Some(source) => eprintln!(
