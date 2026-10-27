@@ -14,6 +14,12 @@ scope and length rules are applied too. Inside OpenCode, Antigravity, Claude Cod
 can copy the session/prompt and last assistant message instead; see
 [Using an OpenCode, Antigravity, Claude Code, or Codex chat](#using-an-opencode-antigravity-claude-code-or-codex-chat).
 
+## Problems
+
+- Ask AI Agents, LLMs to commit changes is waste of tokens.
+- Commit messages already is logs from AI Agent.
+- Simple create, update, delete a file not worth for AI Agent.
+
 ## Install
 
 From the repository root:
@@ -80,17 +86,17 @@ without any staged changes, set `"autoAdd": true` in `mm.json`:
 `mm` can extract the commit message from OpenCode, Antigravity, Claude Code, or Codex chats:
 
 ```sh
-mm --chat --print   # preview the message (auto-detects OpenCode, Antigravity, Claude Code, or Codex)
-mm --agy --print    # preview message from the latest Antigravity log
+mm --chat --print # preview the message (auto-detects OpenCode, Antigravity, Claude Code, or Codex)
+mm --agy --print # preview message from the latest Antigravity log
 mm --claude --print # preview message from the latest Claude Code log
-mm --codex --print  # preview message from the latest Codex log
-mm --codex          # commit using the latest Codex log
+mm --codex --print # preview message from the latest Codex log
+mm --codex # commit using the latest Codex log
 ```
 
-- **OpenCode**: `OPENCODE_SESSION_ID` selects the session. The subject is the session title (or latest user prompt line), and the body is the last assistant message (or compaction summary).
-- **Antigravity**: Transcript logs from `~/.gemini/antigravity-ide/brain` (or `ANTIGRAVITY_CONVERSATION_ID`) are read. The subject is the latest user request line, and the body is the last assistant response.
-- **Claude Code**: Transcript logs from `~/.claude/projects/` (or `CLAUDE_SESSION_ID`) are read. The subject is the latest user prompt line, and the body is the last assistant text response.
-- **Codex**: Transcript logs from `~/.codex/sessions/` (or `CODEX_SESSION_ID`) are read. The subject is the thread title from `session_index.jsonl` (or latest user prompt line), and the body is the last assistant response.
+- OpenCode: `OPENCODE_SESSION_ID` selects the session. The subject is the session title (or latest user prompt line), and the body is the last assistant message (or compaction summary).
+- Antigravity: Transcript logs from `~/.gemini/antigravity-ide/brain` (or `ANTIGRAVITY_CONVERSATION_ID`) are read. The subject is the latest user request line, and the body is the last assistant response.
+- Claude Code: Transcript logs from `~/.claude/projects/` (or `CLAUDE_SESSION_ID`) are read. The subject is the latest user prompt line, and the body is the last assistant text response.
+- Codex: Transcript logs from `~/.codex/sessions/` (or `CODEX_SESSION_ID`) are read. The subject is the thread title from `session_index.jsonl` (or latest user prompt line), and the body is the last assistant response.
 - `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path.
 - `--message` overrides the subject; the copied message remains the body.
 - User file URIs like `file:///Users/user/...` are sanitized to `~/...` to prevent leaking local user names, and references to the current repository directory are sanitized to `./`.
