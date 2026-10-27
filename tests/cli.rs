@@ -1281,6 +1281,151 @@ fn copies_codex_session_with_title_from_session_index() {
 }
 
 #[test]
+fn copies_devin_last_log_with_devin_flag() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let devin_dir = std::env::temp_dir().join(format!("mm-test-devin-{}", std::process::id()));
+    let transcripts_dir = devin_dir.join("transcripts");
+    fs::create_dir_all(&transcripts_dir).unwrap();
+
+    let transcript = r#"{
+  "schema_version": "ATIF-v1.7",
+  "session_id": "session-devin-1",
+  "steps": [
+    {
+      "role": "user",
+      "content": "implement Devin log parser"
+    },
+    {
+      "role": "assistant",
+      "content": "Added Devin support."
+    }
+  ]
+}"#;
+    fs::write(transcripts_dir.join("devin-1.json"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--devin", "--print"],
+        &[("DEVIN_HOME", &devin_dir.to_string_lossy())],
+        &["DEVIN_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "implement Devin log parser\n\nAdded Devin support."
+    );
+
+    let _ = fs::remove_dir_all(devin_dir);
+}
+
+#[test]
+fn copies_devin_log_with_devin_session() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let devin_dir = std::env::temp_dir().join(format!("mm-test-devin-sess-{}", std::process::id()));
+    let transcripts_dir = devin_dir.join("transcripts");
+    fs::create_dir_all(&transcripts_dir).unwrap();
+
+    let transcript = r#"{"role":"user","content":"fix devin session"}
+{"role":"assistant","content":"Fixed devin session."}
+"#;
+    fs::write(transcripts_dir.join("my-specific-devin.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--devin-session", "my-specific-devin", "--print"],
+        &[("DEVIN_HOME", &devin_dir.to_string_lossy())],
+        &["DEVIN_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "fix devin session\n\nFixed devin session.");
+
+    let _ = fs::remove_dir_all(devin_dir);
+}
+
+#[test]
+fn copies_cascade_markdown_trajectory_with_codeium_flag() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let devin_dir = std::env::temp_dir().join(format!("mm-test-cascade-{}", std::process::id()));
+    let cascade_dir = devin_dir.join("cascade");
+    fs::create_dir_all(&cascade_dir).unwrap();
+
+    let trajectory = r#"# Cascade Trajectory
+
+**User**
+cascade user request
+
+**Assistant**
+Thinking Process:
+- analyzing request
+
+Trajectory executed successfully.
+"#;
+    fs::write(cascade_dir.join("trajectory.md"), trajectory).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--codeium", "--print"],
+        &[("DEVIN_HOME", &devin_dir.to_string_lossy())],
+        &["DEVIN_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "cascade user request\n\nTrajectory executed successfully."
+    );
+
+    let _ = fs::remove_dir_all(devin_dir);
+}
+
+#[test]
+fn chat_auto_detects_devin_when_others_not_set() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let devin_dir = std::env::temp_dir().join(format!("mm-test-devin-auto-{}", std::process::id()));
+    let transcripts_dir = devin_dir.join("transcripts");
+    fs::create_dir_all(&transcripts_dir).unwrap();
+
+    let transcript = format!(
+        r#"{{"role":"user","content":"auto detected devin in {}"}}
+{{"role":"assistant","content":"Auto detected devin response."}}
+"#,
+        repo.path().to_string_lossy()
+    );
+    fs::write(transcripts_dir.join("auto-devin.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[("DEVIN_HOME", &devin_dir.to_string_lossy())],
+        &[
+            "DEVIN_SESSION_ID",
+            "OPENCODE_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+            "CLAUDE_SESSION_ID",
+            "CODEX_SESSION_ID",
+        ],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "auto detected devin in ./\n\nAuto detected devin response."
+    );
+
+    let _ = fs::remove_dir_all(devin_dir);
+}
+
+#[test]
 fn chat_auto_adds_commitlint_prefix_when_commitlint_is_configured() {
     let repo = Repo::new();
     repo.write(

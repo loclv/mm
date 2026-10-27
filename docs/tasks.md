@@ -12,7 +12,7 @@ Expand and refine transcript parsing for developer AI environments.
   - Parse chat transcripts from Cursor workspace storage / state databases.
   - Auto-detect when working inside Cursor sessions.
   - CLI flags: `--cursor`, `--cursor-session <ID>`.
-- [ ] Devin / Codeium Support `[Priority: Medium]`
+- [x] Devin / Codeium Support `[Priority: Medium]`
   - Support reading Cascade / Devin transcript logs.
   - CLI flags: `--devin`, `--devin-session <ID>`.
 - [ ] Aider Chat History Support `[Priority: Medium]`

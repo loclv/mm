@@ -10,9 +10,9 @@ mm
 By default there is no AI or network call. The message is built from the paths
 and change types that Git reports.
 If the project has a commitlint configuration, its type,
-scope and length rules are applied too. Inside OpenCode, Antigravity, Claude Code, or Codex, `--chat`, `--agy`, `--claude`, or `--codex`
+scope and length rules are applied too. Inside OpenCode, Antigravity, Claude Code, Codex, or Devin / Codeium, `--chat`, `--agy`, `--claude`, `--codex`, or `--devin`
 can copy the session/prompt and last assistant message instead; see
-[Using an OpenCode, Antigravity, Claude Code, or Codex chat](#using-an-opencode-antigravity-claude-code-or-codex-chat).
+[Using an OpenCode, Antigravity, Claude Code, Codex, or Devin / Codeium chat](#using-an-opencode-antigravity-claude-code-codex-or-devin--codeium-chat).
 
 ## Problems
 
@@ -66,6 +66,7 @@ mm --chat # Copy the current OpenCode, Antigravity, Claude Code, or Codex chat
 mm --agy # Copy the latest Antigravity log commit message
 mm --claude # Copy the latest Claude Code log commit message
 mm --codex # Copy the latest Codex log commit message
+mm --devin # Copy the latest Devin / Cascade log commit message
 mm -m 'JIRA-1: fix' # Keep an existing prefix/description (or override a chat subject)
 ```
 
@@ -100,23 +101,25 @@ without any staged changes, set `"autoAdd": true` in `mm.json`:
 }
 ```
 
-### Using an OpenCode, Antigravity, Claude Code, or Codex chat
+### Using an OpenCode, Antigravity, Claude Code, Codex, or Devin / Codeium chat
 
-`mm` can extract the commit message from OpenCode, Antigravity, Claude Code, or Codex chats:
+`mm` can extract the commit message from OpenCode, Antigravity, Claude Code, Codex, or Devin / Codeium chats:
 
 ```sh
-mm --chat --print # preview the message (auto-detects OpenCode, Antigravity, Claude Code, or Codex)
+mm --chat --print # preview the message (auto-detects OpenCode, Antigravity, Claude Code, Codex, or Devin)
 mm --agy --print # preview message from the latest Antigravity log
 mm --claude --print # preview message from the latest Claude Code log
 mm --codex --print # preview message from the latest Codex log
-mm --codex # commit using the latest Codex log
+mm --devin --print # preview message from the latest Devin / Cascade log
+mm --devin # commit using the latest Devin / Cascade log
 ```
 
 - OpenCode: `OPENCODE_SESSION_ID` selects the session. The subject is the session title (or latest user prompt line), and the body is the last assistant message (or compaction summary).
 - Antigravity: Transcript logs from `~/.gemini/antigravity-ide/brain` (or `ANTIGRAVITY_CONVERSATION_ID`) are read. The subject is the latest user request line, and the body is the last assistant response.
 - Claude Code: Transcript logs from `~/.claude/projects/` (or `CLAUDE_SESSION_ID`) are read. The subject is the latest user prompt line, and the body is the last assistant text response.
 - Codex: Transcript logs from `~/.codex/sessions/` (or `CODEX_SESSION_ID`) are read. The subject is the thread title from `session_index.jsonl` (or latest user prompt line), and the body is the last assistant response.
-- `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path.
+- Devin / Codeium: Devin ATIF JSON/JSONL transcripts and Codeium Windsurf Cascade trajectory markdown files from `~/.local/share/devin/cli/transcripts`, `~/.config/devin`, `~/.devin`, `~/.codeium/windsurf/cascade` (or `DEVIN_HOME`, `DEVIN_SESSION_ID`) are read. The subject is the session title or latest user prompt line, and the body is the last assistant text response.
+- `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, `--devin-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path.
 - `--message` overrides the subject; the copied message remains the body.
 - User file URIs like `file:///Users/user/...` are sanitized to `~/...` to prevent leaking local user names, and references to the current repository directory are sanitized to `./`.
 - When Conventional Commits are enabled, commitlint rules shape the copied chat subject: inferring a missing conventional `type:` prefix from git changes, formatting casing, stripping forbidden trailing full stops, and fitting length limits. The assistant body is copied intact.
@@ -170,7 +173,7 @@ Applied rules:
 Rules about bodies, footers, commit trailers and the case of free-form subjects
 are not applied to generated messages, because `mm` writes only a header. An
 explicit `--message` value is treated as an override and its prefix is kept.
-In chat modes (`--chat`, `--agy`, `--claude`, `--codex`), header shaping rules
+In chat modes (`--chat`, `--agy`, `--claude`, `--codex`, `--devin`), header shaping rules
 (type prefix, casing, length, and trailing full stop removal) are applied to the
 subject, while copying the assistant body intact.
 

@@ -41,6 +41,12 @@ pub const CODEX_SESSION_ENV: &str = "CODEX_SESSION_ID";
 /// Environment variable for Codex home directory override (useful for tests).
 pub const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
+/// Environment variable for explicit Devin session ID.
+pub const DEVIN_SESSION_ENV: &str = "DEVIN_SESSION_ID";
+
+/// Environment variable for Devin home directory override (useful for tests).
+pub const DEVIN_HOME_ENV: &str = "DEVIN_HOME";
+
 /// Longest fallback subject, in characters.
 const FALLBACK_SUBJECT_MAX: usize = 72;
 
@@ -1466,9 +1472,632 @@ pub fn load_codex(
     parse_codex_reader(stream, session_id, thread_name.as_deref(), repo_root)
 }
 
+/// Check if a role or message type indicates user input for Devin / Codeium.
+fn is_devin_user_role(role_or_type: &str) -> bool {
+    matches!(
+        role_or_type.to_ascii_lowercase().as_str(),
+        "user" | "human" | "user_input" | "user_message" | "prompt"
+    )
+}
+
+/// Check if a role or message type indicates assistant output for Devin / Codeium.
+fn is_devin_assistant_role(role_or_type: &str) -> bool {
+    matches!(
+        role_or_type.to_ascii_lowercase().as_str(),
+        "assistant"
+            | "agent"
+            | "model"
+            | "devin"
+            | "cascade"
+            | "agent_message"
+            | "agent_response"
+            | "response"
+    )
+}
+
+/// Extract visible text from a Devin or Cascade message payload.
+fn extract_devin_text(value: &Value, is_user: bool) -> Option<String> {
+    let target = value.get("chat_message").unwrap_or(value);
+    let content = target
+        .get("content")
+        .or_else(|| target.get("text"))
+        .or_else(|| target.get("message"))
+        .or_else(|| target.get("response"))?;
+
+    match content {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Object(map) => {
+            if let Some(text) = map
+                .get("text")
+                .or_else(|| map.get("value"))
+                .and_then(Value::as_str)
+            {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            None
+        }
+        Value::Array(blocks) => {
+            let mut texts = Vec::new();
+            for block in blocks {
+                match block {
+                    Value::String(s) => {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() {
+                            texts.push(trimmed.to_string());
+                        }
+                    }
+                    Value::Object(obj) => {
+                        let block_type = obj.get("type").and_then(Value::as_str).unwrap_or("");
+                        if is_user && (block_type == "tool_result" || block_type == "tool_response")
+                        {
+                            continue;
+                        }
+                        if (block_type == "text"
+                            || block_type == "message"
+                            || block_type.is_empty())
+                            && let Some(t) = obj
+                                .get("text")
+                                .or_else(|| obj.get("content"))
+                                .and_then(Value::as_str)
+                        {
+                            let trimmed = t.trim();
+                            if !trimmed.is_empty() {
+                                texts.push(trimmed.to_string());
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if texts.is_empty() {
+                None
+            } else {
+                Some(texts.join("\n\n"))
+            }
+        }
+        _ => None,
+    }
+}
+
+fn strip_thinking_blocks(text: &str) -> String {
+    let mut in_thinking = false;
+    let mut lines = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("Thinking Process:")
+            || trimmed.starts_with("Thinking:")
+            || trimmed.starts_with("<details><summary>Thinking")
+        {
+            in_thinking = true;
+            continue;
+        }
+        if in_thinking {
+            if trimmed.starts_with("</details>") {
+                in_thinking = false;
+                continue;
+            }
+            if trimmed.is_empty() || trimmed.starts_with("- ") || trimmed.starts_with("* ") {
+                continue;
+            } else {
+                in_thinking = false;
+            }
+        }
+        lines.push(line);
+    }
+    lines.join("\n").trim().to_string()
+}
+
+/// Parse a Markdown trajectory (such as Windsurf Cascade exported trajectory).
+fn parse_devin_markdown(content: &str) -> Option<(Option<String>, Option<String>, Option<String>)> {
+    let mut title: Option<String> = None;
+    let mut latest_prompt: Option<String> = None;
+    let mut last_message: Option<String> = None;
+
+    let mut current_section = "";
+    let mut section_content = String::new();
+
+    for line in content.lines() {
+        let trimmed = line.trim();
+        if (trimmed.starts_with("# ") || trimmed.starts_with("## "))
+            && title.is_none()
+            && (trimmed.contains("Trajectory")
+                || trimmed.contains("Cascade")
+                || trimmed.contains("Devin"))
+        {
+            let t = trimmed.trim_start_matches('#').trim();
+            if let Some(idx) = t.find(':') {
+                let after = t[idx + 1..].trim();
+                if !after.is_empty() && !is_placeholder_title(after) {
+                    title = Some(after.to_string());
+                }
+            } else if !is_placeholder_title(t) {
+                title = Some(t.to_string());
+            }
+        }
+
+        let is_user_heading = trimmed.eq_ignore_ascii_case("## User")
+            || trimmed.eq_ignore_ascii_case("### User")
+            || trimmed.eq_ignore_ascii_case("# User")
+            || trimmed == "**User**"
+            || trimmed.starts_with("**User:**")
+            || trimmed.starts_with("**User**:")
+            || trimmed.starts_with("User:");
+
+        let is_assistant_heading = trimmed.eq_ignore_ascii_case("## Cascade")
+            || trimmed.eq_ignore_ascii_case("### Cascade")
+            || trimmed.eq_ignore_ascii_case("# Cascade")
+            || trimmed == "**Cascade**"
+            || trimmed.starts_with("**Cascade:**")
+            || trimmed.starts_with("**Cascade**:")
+            || trimmed.starts_with("Cascade:")
+            || trimmed.eq_ignore_ascii_case("## Assistant")
+            || trimmed.eq_ignore_ascii_case("### Assistant")
+            || trimmed.eq_ignore_ascii_case("# Assistant")
+            || trimmed == "**Assistant**"
+            || trimmed.starts_with("**Assistant:**")
+            || trimmed.starts_with("**Assistant**:")
+            || trimmed.starts_with("Assistant:")
+            || trimmed.eq_ignore_ascii_case("## Devin")
+            || trimmed.eq_ignore_ascii_case("### Devin")
+            || trimmed.eq_ignore_ascii_case("# Devin")
+            || trimmed == "**Devin**"
+            || trimmed.starts_with("**Devin:**")
+            || trimmed.starts_with("**Devin**:")
+            || trimmed.starts_with("Devin:");
+
+        if is_user_heading {
+            if current_section == "assistant" && !section_content.trim().is_empty() {
+                let stripped = strip_thinking_blocks(section_content.trim());
+                if !stripped.is_empty() {
+                    last_message = Some(stripped);
+                }
+            }
+            current_section = "user";
+            section_content.clear();
+            if let Some(idx) = trimmed.find(':') {
+                section_content.push_str(trimmed[idx + 1..].trim());
+                section_content.push('\n');
+            }
+        } else if is_assistant_heading {
+            if current_section == "user"
+                && !section_content.trim().is_empty()
+                && let Some(first) = first_line(section_content.trim())
+            {
+                let cleaned = clean_prompt_line(&first);
+                if !cleaned.is_empty() {
+                    latest_prompt = Some(cleaned);
+                }
+            }
+            current_section = "assistant";
+            section_content.clear();
+            if let Some(idx) = trimmed.find(':') {
+                section_content.push_str(trimmed[idx + 1..].trim());
+                section_content.push('\n');
+            }
+        } else if !current_section.is_empty() {
+            section_content.push_str(line);
+            section_content.push('\n');
+        }
+    }
+
+    if current_section == "user"
+        && !section_content.trim().is_empty()
+        && let Some(first) = first_line(section_content.trim())
+    {
+        let cleaned = clean_prompt_line(&first);
+        if !cleaned.is_empty() {
+            latest_prompt = Some(cleaned);
+        }
+    } else if current_section == "assistant" && !section_content.trim().is_empty() {
+        let stripped = strip_thinking_blocks(section_content.trim());
+        if !stripped.is_empty() {
+            last_message = Some(stripped);
+        }
+    }
+
+    if last_message.is_some() {
+        Some((title, latest_prompt, last_message))
+    } else {
+        None
+    }
+}
+
+/// Return candidate transcript directories for Devin and Codeium / Cascade.
+pub fn devin_transcripts_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    if let Ok(dir) = std::env::var(DEVIN_HOME_ENV) {
+        let p = PathBuf::from(dir);
+        if p.is_dir() {
+            dirs.push(p.join("transcripts"));
+            dirs.push(p.join("cli").join("transcripts"));
+            dirs.push(p.join("cascade"));
+            dirs.push(p.join("windsurf").join("cascade"));
+            dirs.push(p.clone());
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        dirs.push(
+            home.join(".local")
+                .join("share")
+                .join("devin")
+                .join("cli")
+                .join("transcripts"),
+        );
+        dirs.push(
+            home.join(".local")
+                .join("share")
+                .join("devin")
+                .join("transcripts"),
+        );
+        dirs.push(home.join(".config").join("devin").join("transcripts"));
+        dirs.push(home.join(".devin").join("transcripts"));
+        dirs.push(home.join(".devin").join("sessions"));
+        dirs.push(home.join(".devin"));
+        dirs.push(home.join(".codeium").join("windsurf").join("cascade"));
+    }
+
+    if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
+        dirs.push(appdata.join("devin").join("cli").join("transcripts"));
+        dirs.push(appdata.join("devin").join("transcripts"));
+        dirs.push(appdata.join("Codeium").join("windsurf").join("cascade"));
+    }
+
+    dirs.retain(|d| d.is_dir());
+    dirs
+}
+
+/// Recursively collect Devin / Cascade transcript files from a directory into candidates list.
+fn collect_devin_transcripts_rec(
+    dir: &Path,
+    depth: usize,
+    candidates: &mut Vec<(SystemTime, String, PathBuf)>,
+) {
+    if depth > 4 {
+        return;
+    }
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() {
+                let ext = p.extension().and_then(|s| s.to_str()).unwrap_or("");
+                if matches!(ext, "json" | "jsonl" | "atif" | "md") {
+                    let stem = p
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("devin")
+                        .to_string();
+                    let mtime = fs::metadata(&p)
+                        .and_then(|m| m.modified())
+                        .unwrap_or(UNIX_EPOCH);
+                    candidates.push((mtime, stem, p));
+                }
+            } else if p.is_dir() {
+                collect_devin_transcripts_rec(&p, depth + 1, candidates);
+            }
+        }
+    }
+}
+
+/// Collect Devin / Cascade transcript files from a directory into candidates list.
+pub fn collect_devin_transcripts(dir: &Path, candidates: &mut Vec<(SystemTime, String, PathBuf)>) {
+    collect_devin_transcripts_rec(dir, 0, candidates);
+}
+
+/// Resolve a Devin session inside a directory.
+pub fn resolve_devin_session_in(dir: &Path, session: &str) -> Option<(String, PathBuf)> {
+    for ext in ["json", "jsonl", "atif", "md"] {
+        let direct = dir.join(format!("{session}.{ext}"));
+        if direct.is_file() {
+            return Some((session.to_string(), direct));
+        }
+    }
+
+    let exact = dir.join(session);
+    if exact.is_file() {
+        return Some((session.to_string(), exact));
+    }
+
+    let mut candidates = Vec::new();
+    collect_devin_transcripts(dir, &mut candidates);
+    for (_, name, p) in candidates {
+        if name == session || name.starts_with(session) || session.starts_with(&name) {
+            return Some((name, p));
+        }
+    }
+
+    None
+}
+
+/// Resolve a Devin / Cascade session by session ID or file path.
+pub fn resolve_devin_session(session: &str) -> Option<(String, PathBuf)> {
+    let path = Path::new(session);
+    if path.is_file() {
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("devin")
+            .to_string();
+        return Some((name, path.to_path_buf()));
+    }
+    if path.is_dir() {
+        let mut candidates = Vec::new();
+        collect_devin_transcripts(path, &mut candidates);
+        candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+        if let Some((_, name, p)) = candidates.into_iter().next() {
+            return Some((name, p));
+        }
+    }
+
+    for dir in devin_transcripts_dirs() {
+        if let Some(resolved) = resolve_devin_session_in(&dir, session) {
+            return Some(resolved);
+        }
+    }
+
+    None
+}
+
+/// Find the latest Devin / Cascade session log.
+pub fn find_latest_devin_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+    let mut candidates = Vec::new();
+    for dir in devin_transcripts_dirs() {
+        collect_devin_transcripts(&dir, &mut candidates);
+    }
+
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+    candidates.dedup_by(|a, b| a.2 == b.2);
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    if let Some(root) = repo_root {
+        let root_str = root.to_string_lossy();
+        for (_, name, log_path) in candidates.iter().take(20) {
+            if let Ok(mut file) = fs::File::open(log_path) {
+                use std::io::Read;
+                let mut buffer = [0u8; 65536];
+                if let Ok(n) = file.read(&mut buffer) {
+                    let sample = String::from_utf8_lossy(&buffer[..n]);
+                    if sample.contains(&*root_str) {
+                        return Some((name.clone(), log_path.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    let (_, name, log_path) = candidates.remove(0);
+    Some((name, log_path))
+}
+
+/// Parse a Devin transcript from a reader.
+pub fn parse_devin_reader<R: BufRead>(
+    mut reader: R,
+    session_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
+    let mut buffer = String::new();
+    reader
+        .read_to_string(&mut buffer)
+        .map_err(|e| format!("failed to read transcript: {e}"))?;
+
+    let trimmed = buffer.trim();
+    if trimmed.is_empty() {
+        return Err(format!(
+            "Devin session `{session_id}` has no assistant response text to copy"
+        ));
+    }
+
+    let mut latest_prompt: Option<String> = None;
+    let mut last_message: Option<String> = None;
+    let mut title: Option<String> = None;
+    let mut inferred_session_id: Option<String> = None;
+
+    // 1. Try parsing as full JSON (ATIF JSON, JSON session export)
+    if (trimmed.starts_with('{') || trimmed.starts_with('['))
+        && let Ok(root_val) = serde_json::from_str::<Value>(trimmed)
+    {
+        if let Some(id) = root_val
+            .get("session_id")
+            .or_else(|| root_val.get("id"))
+            .and_then(Value::as_str)
+        {
+            inferred_session_id = Some(id.to_string());
+        }
+        if let Some(t) = root_val
+            .get("title")
+            .or_else(|| root_val.get("session_name"))
+            .or_else(|| root_val.get("name"))
+            .and_then(Value::as_str)
+        {
+            let t_trimmed = t.trim();
+            if !t_trimmed.is_empty() && !is_placeholder_title(t_trimmed) {
+                title = Some(t_trimmed.to_string());
+            }
+        }
+
+        let items: Option<&Vec<Value>> = root_val
+            .get("steps")
+            .or_else(|| root_val.get("messages"))
+            .or_else(|| root_val.get("nodes"))
+            .or_else(|| root_val.get("trajectory"))
+            .or_else(|| root_val.get("history"))
+            .or_else(|| root_val.get("turns"))
+            .and_then(Value::as_array)
+            .or_else(|| root_val.as_array());
+
+        if let Some(steps) = items {
+            for step in steps {
+                let role = step
+                    .get("role")
+                    .or_else(|| step.get("type"))
+                    .or_else(|| step.get("source"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let is_user_flag = step
+                    .get("is_user_input")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+
+                if is_user_flag || is_devin_user_role(role) {
+                    if let Some(text) = extract_devin_text(step, true) {
+                        let cleaned_text = extract_user_request(&text);
+                        if let Some(first) = first_line(&cleaned_text) {
+                            let cleaned = clean_prompt_line(&first);
+                            if !cleaned.is_empty() {
+                                latest_prompt = Some(sanitize_file_urls(&cleaned));
+                            }
+                        }
+                    }
+                } else if is_devin_assistant_role(role)
+                    && let Some(text) = extract_devin_text(step, false)
+                {
+                    let trimmed_text = text.trim();
+                    if !trimmed_text.is_empty() {
+                        last_message = Some(sanitize_file_urls(trimmed_text));
+                    }
+                }
+            }
+        }
+    }
+
+    // 2. If no assistant message found, try parsing as JSON Lines
+    if last_message.is_none() {
+        for line in trimmed.lines() {
+            let line_trimmed = line.trim();
+            if line_trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<Value>(line_trimmed) {
+                if inferred_session_id.is_none()
+                    && let Some(id) = val
+                        .get("session_id")
+                        .or_else(|| val.get("id"))
+                        .and_then(Value::as_str)
+                {
+                    inferred_session_id = Some(id.to_string());
+                }
+                let role = val
+                    .get("role")
+                    .or_else(|| val.get("type"))
+                    .or_else(|| val.get("source"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let is_user_flag = val
+                    .get("is_user_input")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
+
+                if is_user_flag || is_devin_user_role(role) {
+                    if let Some(text) = extract_devin_text(&val, true) {
+                        let cleaned_text = extract_user_request(&text);
+                        if let Some(first) = first_line(&cleaned_text) {
+                            let cleaned = clean_prompt_line(&first);
+                            if !cleaned.is_empty() {
+                                latest_prompt = Some(sanitize_file_urls(&cleaned));
+                            }
+                        }
+                    }
+                } else if is_devin_assistant_role(role)
+                    && let Some(text) = extract_devin_text(&val, false)
+                {
+                    let trimmed_text = text.trim();
+                    if !trimmed_text.is_empty() {
+                        last_message = Some(sanitize_file_urls(trimmed_text));
+                    }
+                }
+            }
+        }
+    }
+
+    // 3. If still no messages found, try Markdown format
+    if last_message.is_none()
+        && let Some((md_title, md_prompt, md_msg)) = parse_devin_markdown(trimmed)
+    {
+        if title.is_none() {
+            title = md_title;
+        }
+        if latest_prompt.is_none() {
+            latest_prompt = md_prompt;
+        }
+        last_message = md_msg;
+    }
+
+    let final_session_id =
+        if session_id.is_empty() || session_id == "devin" || session_id == "cascade" {
+            inferred_session_id.as_deref().unwrap_or(session_id)
+        } else {
+            session_id
+        };
+
+    let body = last_message.ok_or_else(|| {
+        format!("Devin session `{final_session_id}` has no assistant response text to copy")
+    })?;
+
+    let (subject, subject_source) = if let Some(t) = title {
+        let sanitized = sanitize_current_path(&sanitize_file_urls(&t), repo_root);
+        (sanitized, SubjectSource::Title)
+    } else if let Some(prompt) = latest_prompt {
+        let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
+        (
+            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
+            SubjectSource::LatestPrompt,
+        )
+    } else {
+        let line = first_line(&body).unwrap_or_else(|| body.clone());
+        let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
+        (
+            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
+            SubjectSource::LastMessage,
+        )
+    };
+
+    Ok(ChatMessage {
+        session_id: final_session_id.to_string(),
+        subject: sanitize_file_urls(&subject),
+        body: sanitize_file_urls(&body),
+        subject_source,
+    })
+}
+
+/// Parse a Devin transcript from a byte slice.
+pub fn parse_devin(transcript: &[u8], session_id: &str) -> Result<ChatMessage, String> {
+    parse_devin_reader(std::io::Cursor::new(transcript), session_id, None)
+}
+
+/// Load and parse a Devin transcript from disk.
+pub fn load_devin(
+    path: &Path,
+    session_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
+    let file = fs::File::open(path).map_err(|error| {
+        format!(
+            "could not open Devin transcript {}: {error}",
+            path.display()
+        )
+    })?;
+    let reader = std::io::BufReader::new(file);
+    parse_devin_reader(reader, session_id, repo_root)
+}
+
 /// Load and parse a session export or conversation log.
 ///
 /// Sources supported:
+/// - Explicit Devin / Codeium session via `force_devin` or `session`.
 /// - Explicit Codex session via `force_codex` or `session`.
 /// - Explicit Claude Code session via `force_claude` or `session`.
 /// - Explicit Antigravity conversation or OpenCode session via `session`.
@@ -1476,13 +2105,15 @@ pub fn load_codex(
 /// - `CLAUDE_SESSION_ID` environment variable.
 /// - `ANTIGRAVITY_CONVERSATION_ID` environment variable.
 /// - `CODEX_SESSION_ID` environment variable.
-/// - Auto-detection of the latest conversation log across Antigravity, Claude Code, and Codex.
+/// - `DEVIN_SESSION_ID` environment variable.
+/// - Auto-detection of the latest conversation log across Antigravity, Claude Code, Codex, and Devin.
 pub fn load(
     session: Option<&str>,
     repo_root: Option<&Path>,
     force_antigravity: bool,
     force_claude: bool,
     force_codex: bool,
+    force_devin: bool,
     verbose: bool,
 ) -> Result<ChatMessage, String> {
     let mut chat = load_raw(
@@ -1491,6 +2122,7 @@ pub fn load(
         force_antigravity,
         force_claude,
         force_codex,
+        force_devin,
         verbose,
     )?;
     chat.subject = sanitize_current_path(&chat.subject, repo_root);
@@ -1504,9 +2136,35 @@ fn load_raw(
     force_antigravity: bool,
     force_claude: bool,
     force_codex: bool,
+    force_devin: bool,
     verbose: bool,
 ) -> Result<ChatMessage, String> {
     let trimmed_session = session.map(str::trim).filter(|value| !value.is_empty());
+
+    if force_devin {
+        let (id, path) = if let Some(sess) = trimmed_session {
+            resolve_devin_session(sess)
+                .ok_or_else(|| format!("could not find Devin session or transcript `{sess}`"))?
+        } else if let Some((id, path)) = std::env::var(DEVIN_SESSION_ENV).ok().and_then(|sess| {
+            let s = sess.trim();
+            if s.is_empty() {
+                None
+            } else {
+                resolve_devin_session(s)
+            }
+        }) {
+            (id, path)
+        } else {
+            find_latest_devin_log(repo_root)
+                .ok_or_else(|| "no Devin session log found".to_string())?
+        };
+
+        if verbose {
+            eprintln!("[mm] chat: using Devin log {} ({})", id, path.display());
+        }
+
+        return load_devin(&path, &id, repo_root);
+    }
 
     if force_codex {
         let (id, path) = if let Some(sess) = trimmed_session {
@@ -1598,6 +2256,13 @@ fn load_raw(
     }
 
     if let Some(sess) = trimmed_session {
+        if let Some((id, path)) = resolve_devin_session(sess) {
+            if verbose {
+                eprintln!("[mm] chat: using Devin log {} ({})", id, path.display());
+            }
+            return load_devin(&path, &id, repo_root);
+        }
+
         if let Some((id, path)) = resolve_claude_session(sess) {
             if verbose {
                 eprintln!(
@@ -1650,6 +2315,18 @@ fn load_raw(
         ));
     }
 
+    if let Ok(devin_session) = std::env::var(DEVIN_SESSION_ENV) {
+        let sess = devin_session.trim();
+        if !sess.is_empty()
+            && let Some((id, path)) = resolve_devin_session(sess)
+        {
+            if verbose {
+                eprintln!("[mm] chat: using Devin log {} ({})", id, path.display());
+            }
+            return load_devin(&path, &id, repo_root);
+        }
+    }
+
     if let Ok(claude_session) = std::env::var(CLAUDE_SESSION_ENV) {
         let sess = claude_session.trim();
         if !sess.is_empty()
@@ -1699,7 +2376,7 @@ fn load_raw(
         }
     }
 
-    // Auto-detect between Antigravity, Claude Code, and Codex logs by latest modified time
+    // Auto-detect between Antigravity, Claude Code, Codex, and Devin logs by latest modified time
     let mut local_candidates: Vec<(SystemTime, String, PathBuf, &'static str)> = Vec::new();
 
     if let Some((id, path)) = find_latest_antigravity_log(repo_root) {
@@ -1720,6 +2397,12 @@ fn load_raw(
             .unwrap_or(UNIX_EPOCH);
         local_candidates.push((mtime, id, path, "Codex"));
     }
+    if let Some((id, path)) = find_latest_devin_log(repo_root) {
+        let mtime = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+        local_candidates.push((mtime, id, path, "Devin"));
+    }
 
     local_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
 
@@ -1735,12 +2418,13 @@ fn load_raw(
             "Antigravity" => load_antigravity(&path, &id, repo_root),
             "Claude Code" => load_claude(&path, &id, repo_root),
             "Codex" => load_codex(&path, &id, repo_root),
+            "Devin" => load_devin(&path, &id, repo_root),
             _ => unreachable!(),
         };
     }
 
     Err(format!(
-        "no OpenCode session, Antigravity log, Claude Code session, or Codex session found; set {SESSION_ENV}, {ANTIGRAVITY_SESSION_ENV}, {CLAUDE_SESSION_ENV}, {CODEX_SESSION_ENV}, or pass --chat-session <ID>"
+        "no OpenCode session, Antigravity log, Claude Code session, Codex session, or Devin log found; set {SESSION_ENV}, {ANTIGRAVITY_SESSION_ENV}, {CLAUDE_SESSION_ENV}, {CODEX_SESSION_ENV}, {DEVIN_SESSION_ENV}, or pass --chat-session <ID>"
     ))
 }
 
@@ -2019,9 +2703,15 @@ fn first_line(value: &str) -> Option<String> {
         .map(str::to_string)
 }
 
-/// OpenCode creates placeholder titles before the title agent runs.
+/// OpenCode and exported trajectories create placeholder titles before the title agent runs.
 fn is_placeholder_title(title: &str) -> bool {
-    title.to_lowercase().starts_with("new session")
+    let lower = title.to_lowercase();
+    lower.starts_with("new session")
+        || lower == "cascade trajectory"
+        || lower == "trajectory"
+        || lower == "devin trajectory"
+        || lower == "devin session"
+        || lower == "conversation"
 }
 
 #[cfg(test)]
@@ -2620,5 +3310,101 @@ mod tests {
             ),
             "See ~/w/auto-commit/rust-extra/src/main.rs"
         );
+    }
+
+    #[test]
+    fn parses_devin_atif_json() {
+        let transcript = r#"{
+            "session_id": "devin-session-123",
+            "schema_version": "ATIF-v1.7",
+            "steps": [
+                {
+                    "node_id": "step_1",
+                    "role": "user",
+                    "content": {
+                        "text": "Add Cascade and Devin transcript parsing support"
+                    }
+                },
+                {
+                    "node_id": "step_2",
+                    "role": "assistant",
+                    "chat_message": {
+                        "content": "Added support for reading Devin and Cascade transcripts."
+                    }
+                }
+            ]
+        }"#;
+
+        let msg = parse_devin(transcript.as_bytes(), "devin-session-123").unwrap();
+        assert_eq!(
+            msg.subject,
+            "Add Cascade and Devin transcript parsing support"
+        );
+        assert_eq!(
+            msg.body,
+            "Added support for reading Devin and Cascade transcripts."
+        );
+        assert_eq!(msg.session_id, "devin-session-123");
+        assert_eq!(msg.subject_source, SubjectSource::LatestPrompt);
+    }
+
+    #[test]
+    fn parses_devin_jsonl() {
+        let transcript = r#"{"role":"user","content":"Fix database connection retry"}
+{"role":"assistant","content":"Implemented exponential backoff on connection retries."}
+"#;
+
+        let msg = parse_devin(transcript.as_bytes(), "devin-jsonl-1").unwrap();
+        assert_eq!(msg.subject, "Fix database connection retry");
+        assert_eq!(
+            msg.body,
+            "Implemented exponential backoff on connection retries."
+        );
+        assert_eq!(msg.subject_source, SubjectSource::LatestPrompt);
+    }
+
+    #[test]
+    fn parses_devin_with_title() {
+        let transcript = r#"{
+            "session_id": "devin-title-test",
+            "title": "feat(api): add auth endpoints",
+            "steps": [
+                {"role": "user", "content": "setup auth"},
+                {"role": "assistant", "content": "Auth endpoints created."}
+            ]
+        }"#;
+
+        let msg = parse_devin(transcript.as_bytes(), "devin-title-test").unwrap();
+        assert_eq!(msg.subject, "feat(api): add auth endpoints");
+        assert_eq!(msg.body, "Auth endpoints created.");
+        assert_eq!(msg.subject_source, SubjectSource::Title);
+    }
+
+    #[test]
+    fn parses_cascade_markdown_trajectory() {
+        let transcript = r#"# Cascade Trajectory: Refactor router
+
+## User
+Refactor router to use async handlers
+
+## Cascade
+Router has been refactored to use async handlers across all routes.
+"#;
+
+        let msg = parse_devin(transcript.as_bytes(), "cascade-md").unwrap();
+        assert_eq!(msg.subject, "Refactor router");
+        assert_eq!(
+            msg.body,
+            "Router has been refactored to use async handlers across all routes."
+        );
+        assert_eq!(msg.subject_source, SubjectSource::Title);
+    }
+
+    #[test]
+    fn devin_rejects_empty_assistant() {
+        let transcript = r#"{"steps":[{"role":"user","content":"only a prompt"}]}"#;
+        let err = parse_devin(transcript.as_bytes(), "empty-devin").unwrap_err();
+        assert!(err.contains("no assistant response text"));
+        assert!(err.contains("empty-devin"));
     }
 }

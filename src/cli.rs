@@ -42,6 +42,8 @@ pub struct Options {
     pub claude: bool,
     /// Force copying from Codex.
     pub codex: bool,
+    /// Force copying from Devin / Codeium.
+    pub devin: bool,
     /// Chat session or conversation ID to copy; implies `chat`.
     pub chat_session: Option<String>,
     /// Explicit commitlint configuration file.
@@ -74,11 +76,11 @@ Messages follow Conventional Commits by default. Add `mm.json` with
 {\"autoAdd\": true} to automatically stage all changes when none are staged.
 
 Pass --chat to copy the title and last assistant message from the current
-OpenCode, Antigravity, Claude Code, or Codex session instead; chat messages are not
+OpenCode, Antigravity, Claude Code, Codex, or Devin session instead; chat messages are not
 reshaped by commitlint. If copying from chat fails, mm automatically falls back
 to auto commit message generation. Use --chat-session <ID> to select a different
-session, --agy to copy from Antigravity, --claude to copy from Claude Code, or --codex
-to copy from Codex.
+session, --agy to copy from Antigravity, --claude to copy from Claude Code, --codex
+to copy from Codex, or --devin to copy from Devin / Codeium.
 
 Options:
   -a, --add              Stage all changes, including untracked files, first
@@ -86,7 +88,7 @@ Options:
   -p, --print            Print the generated message and exit without committing
   -d, --dry-run          Alias for --print
   -m, --message <MSG>    Merge the generated description (or override a chat subject)
-      --chat             Copy the chat title and last message (OpenCode, Antigravity, Claude Code, or Codex)
+      --chat             Copy the chat title and last message (OpenCode, Antigravity, Claude Code, Codex, or Devin)
       --chat-session <ID>  Use a specific session ID or transcript path (implies --chat)
       --agy, --antigravity Copy the Antigravity last log commit message (implies --chat)
       --agy-session <ID>   Use a specific Antigravity conversation (implies --agy)
@@ -94,6 +96,8 @@ Options:
       --claude-session <ID> Use a specific Claude Code session (implies --claude)
       --codex            Copy the Codex last log commit message (implies --chat)
       --codex-session <ID>  Use a specific Codex session (implies --codex)
+      --devin, --codeium Copy the Devin / Codeium last log commit message (implies --chat)
+      --devin-session <ID>  Use a specific Devin / Codeium session (implies --devin)
   -c, --config <FILE>    Use this commitlint configuration instead of searching
   -s, --staged           Only use staged changes; never fall back to unstaged
       --no-verify        Bypass Git commit hooks
@@ -110,6 +114,7 @@ Examples:
   mm --agy --print       Preview the message copied from Antigravity's last log
   mm --claude --print    Preview the message copied from Claude Code's last log
   mm --codex --print     Preview the message copied from Codex's last log
+  mm --devin --print     Preview the message copied from Devin's last log
   mm -m 'JIRA-1: fix'    Keep the existing prefix/description
 ";
 
@@ -178,6 +183,19 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
                 options.codex = true;
                 options.chat_session = Some(value.clone());
             }
+            "--devin" | "--codeium" => {
+                options.chat = true;
+                options.devin = true;
+            }
+            "--devin-session" | "--codeium-session" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| format!("`{arg}` requires a value"))?;
+                options.chat = true;
+                options.devin = true;
+                options.chat_session = Some(value.clone());
+            }
             "--chat-session" => {
                 index += 1;
                 let value = args
@@ -215,6 +233,16 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
                 options.chat = true;
                 options.codex = true;
                 options.chat_session = Some(arg["--codex-session=".len()..].to_string());
+            }
+            _ if arg.starts_with("--devin-session=") => {
+                options.chat = true;
+                options.devin = true;
+                options.chat_session = Some(arg["--devin-session=".len()..].to_string());
+            }
+            _ if arg.starts_with("--codeium-session=") => {
+                options.chat = true;
+                options.devin = true;
+                options.chat_session = Some(arg["--codeium-session=".len()..].to_string());
             }
             _ if arg.starts_with("--chat-session=") => {
                 options.chat = true;
@@ -299,6 +327,7 @@ pub fn execute(options: &Options) -> Result<(), String> {
             options.antigravity,
             options.claude,
             options.codex,
+            options.devin,
             options.verbose,
         );
 
@@ -489,6 +518,7 @@ mod tests {
                 antigravity: false,
                 claude: false,
                 codex: false,
+                devin: false,
                 chat_session: None,
                 config: None,
                 staged_only: true,
@@ -619,6 +649,48 @@ mod tests {
                 ..Options::default()
             })
         );
+
+        assert_eq!(
+            parse_args(&args(&["--devin"])).unwrap(),
+            Command::Run(Options {
+                chat: true,
+                devin: true,
+                ..Options::default()
+            })
+        );
+
+        assert_eq!(
+            parse_args(&args(&["--codeium"])).unwrap(),
+            Command::Run(Options {
+                chat: true,
+                devin: true,
+                ..Options::default()
+            })
+        );
+
+        let devin_space = parse_args(&args(&["--devin-session", "devin_test"])).unwrap();
+        let devin_equals = parse_args(&args(&["--devin-session=devin_test"])).unwrap();
+        assert_eq!(devin_space, devin_equals);
+        assert_eq!(
+            devin_space,
+            Command::Run(Options {
+                chat: true,
+                devin: true,
+                chat_session: Some("devin_test".to_string()),
+                ..Options::default()
+            })
+        );
+
+        let codeium_equals = parse_args(&args(&["--codeium-session=codeium_test"])).unwrap();
+        assert_eq!(
+            codeium_equals,
+            Command::Run(Options {
+                chat: true,
+                devin: true,
+                chat_session: Some("codeium_test".to_string()),
+                ..Options::default()
+            })
+        );
     }
 
     #[test]
@@ -627,6 +699,8 @@ mod tests {
         assert!(parse_args(&args(&["--agy-session"])).is_err());
         assert!(parse_args(&args(&["--claude-session"])).is_err());
         assert!(parse_args(&args(&["--codex-session"])).is_err());
+        assert!(parse_args(&args(&["--devin-session"])).is_err());
+        assert!(parse_args(&args(&["--codeium-session"])).is_err());
     }
 
     #[test]
