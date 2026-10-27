@@ -22,13 +22,32 @@ can copy the session/prompt and last assistant message instead; see
 
 ## Install
 
-From the repository root:
+### Homebrew (macOS & Linux)
+
+```sh
+brew tap loclv/tap
+brew install mm
+```
+
+### cargo-binstall (Pre-built Binaries)
+
+Install pre-compiled binaries fast without building from source:
+
+```sh
+cargo binstall mm
+```
+
+### Pre-compiled Binaries (GitHub Releases)
+
+Download pre-built archives for Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), and Windows from [GitHub Releases](https://github.com/loclv/mm/releases).
+
+### From Source
 
 ```sh
 cargo install --path .
 ```
 
-The binary is called `mm`. To build without installing:
+To build without installing:
 
 ```sh
 cargo build --release

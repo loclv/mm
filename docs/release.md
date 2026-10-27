@@ -93,26 +93,42 @@ mm -v # should show the newly bumped version
 Commit the release changes:
 
 ```sh
-git add Cargo.toml Cargo.lock CHANGELOG.md docs/
-git commit -m "chore: release v0.2.1"
+git add Cargo.toml Cargo.lock CHANGELOG.md docs/ Formula/
+git commit -m "chore: release v0.2.3"
 ```
 
-Create an annotated Git tag:
+Create an annotated Git tag matching `release-*` (for example `release-v0.2.3`):
 
 ```sh
-git tag -a v0.2.1 -m "Release v0.2.1"
+git tag -a release-v0.2.3 -m "Release v0.2.3"
 ```
 
 Push commits and tags to remote:
 
 ```sh
 git push origin main
-git push origin v0.2.1
+git push origin release-v0.2.3
 # or push both at once:
 git push origin main --tags
 ```
 
-## 7. Publishing (crates.io)
+## 7. Automated Cross-Compilation & Release Pipeline
+
+Pushing a `release-*` tag triggers [`.github/workflows/release.yml`](file:///Users/a0/w/auto-commit/rust/.github/workflows/release.yml):
+
+- Cross-compilation: Compiles binaries for:
+  - Linux `x86_64` (`x86_64-unknown-linux-gnu`)
+  - Linux `aarch64` (`aarch64-unknown-linux-gnu`)
+  - macOS Intel (`x86_64-apple-darwin`)
+  - macOS Apple Silicon (`aarch64-apple-darwin`)
+  - Windows `x86_64` (`x86_64-pc-windows-msvc`)
+- Assets uploaded: Release tarballs (`.tar.gz`), zip (`.zip`), and `SHA256SUMS.txt`.
+- `cargo-binstall`: Supported out-of-the-box via `[package.metadata.binstall]` in `Cargo.toml`.
+- Homebrew tap: Automatically generates `Formula/mm.rb` with current checksums and pushes to `loclv/homebrew-tap` if `HOMEBREW_TAP_TOKEN` secret is configured.
+
+See [docs/packaging.md](file:///Users/a0/w/auto-commit/rust/docs/packaging.md) for full distribution and packaging details.
+
+## 8. Publishing (crates.io)
 
 If publishing to [crates.io](https://crates.io):
 

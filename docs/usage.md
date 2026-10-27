@@ -14,6 +14,21 @@ OpenCode session.
 
 ## Install for macOS / zsh
 
+### Option A: Homebrew (Recommended)
+
+```sh
+brew tap loclv/tap
+brew install mm
+```
+
+### Option B: cargo-binstall (Pre-built Binaries)
+
+```sh
+cargo binstall mm
+```
+
+### Option C: From Source via Cargo
+
 From the repository root:
 
 ```sh

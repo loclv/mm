@@ -96,6 +96,6 @@ Streamline command-line ergonomics and developer workflows.
 
 - [ ] Zero-Copy Git Status Parsing `[Priority: Low]`
   - Benchmark and optimize NUL-separated change list parsing for massive commits (1,000+ files).
-- [ ] Pre-built Binaries & Packaging `[Priority: Medium]`
+- [x] Pre-built Binaries & Packaging `[Priority: Medium]`
   - GitHub Actions release pipeline for cross-compiling Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), and Windows.
   - Publish to `cargo-binstall` and Homebrew tap.

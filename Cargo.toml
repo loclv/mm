@@ -4,7 +4,7 @@ version = "0.2.2"
 edition = "2024"
 description = "Generate a Conventional Commit message from Git changes and commit it"
 license = "MIT"
-repository = "https://github.com/MichaelCurrin/auto-commit-msg"
+repository = "https://github.com/loclv/mm"
 readme = "README.md"
 default-run = "mm"
 
@@ -20,6 +20,14 @@ path = "src/lib.rs"
 strip = true
 lto = true
 codegen-units = 1
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/release-v{ version }/{ name }-{ target }.{ archive-format }"
+bin-dir = "{ bin }{ binary-ext }"
+pkg-fmt = "tar.gz"
+
+[package.metadata.binstall.overrides.x86_64-pc-windows-msvc]
+pkg-fmt = "zip"
 
 [dependencies]
 serde_json = "1.0.154"
