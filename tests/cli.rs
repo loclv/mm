@@ -1323,3 +1323,42 @@ fn chat_auto_adds_commitlint_prefix_when_commitlint_is_configured() {
 
     let _ = fs::remove_dir_all(brain);
 }
+
+#[test]
+fn chat_infers_feat_prefix_when_log_includes_feat_keywords() {
+    let repo = Repo::new();
+    repo.write(
+        ".commitlintrc.json",
+        r#"{
+  "extends": ["@commitlint/config-conventional"]
+}"#,
+    );
+    // Modified file is a doc file, which would normally infer `docs:`
+    repo.write("README.md", "# updated docs\n");
+    repo.git(&["add", "README.md"]);
+
+    let brain =
+        std::env::temp_dir().join(format!("mm-test-brain-feat-keyword-{}", std::process::id()));
+    let conv_dir = brain.join("conv-feat-keyword");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let transcript = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nadd option at \"mm.json\" file that auto commit with only `mm` CLI\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Added the option."}
+"#;
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--agy", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "feat: add option at \"mm.json\" file that auto commit with only `mm` CLI\n\nAdded the option."
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}

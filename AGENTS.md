@@ -79,7 +79,8 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
     `file:///Users/user/.../rust/`) are replaced with `./`.
 - `Policy` intentionally supports only rules that shape the single-line header
   (type/scope/length/full stop). In `--chat` mode, the subject header is shaped
-  by Policy (inferring prefix if missing, adjusting case, stripping full stops,
+  by Policy (inferring `feat` if the subject includes `add`/`create`/`implement` keywords,
+  otherwise inferring from changes, adjusting case, stripping full stops,
   and enforcing length) when conventional commits are enabled, while the body
   copies the assistant message intact.
 - Change selection is compatibility behavior: staged changes win; otherwise

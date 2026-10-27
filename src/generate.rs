@@ -382,6 +382,52 @@ pub fn infer_type_prefix(changes: &[FileChange], policy: &Policy) -> String {
     }
 }
 
+/// Check if the text includes keywords indicating a new feature:
+/// "add", "create", "implement" (and their grammatical variants).
+pub fn includes_feat_keyword(text: &str) -> bool {
+    let lower = text.to_ascii_lowercase();
+    for token in lower.split(|c: char| !c.is_ascii_alphanumeric()) {
+        if token.is_empty() {
+            continue;
+        }
+        if token == "add"
+            || (token.starts_with("add")
+                && !token.starts_with("address")
+                && !token.starts_with("addict")
+                && !token.starts_with("adder"))
+        {
+            return true;
+        }
+        if token.starts_with("creat") {
+            return true;
+        }
+        if token.starts_with("implement") {
+            return true;
+        }
+    }
+    false
+}
+
+/// Infer the Conventional Commit type/scope prefix for a chat message.
+///
+/// When the chat subject/message includes "add", "create", or "implement",
+/// the prefix is "feat". Otherwise, it falls back to inferring the type from
+/// the changed files.
+pub fn infer_chat_type_prefix(subject: &str, changes: &[FileChange], policy: &Policy) -> String {
+    if includes_feat_keyword(subject) {
+        let mut auto = ConvCommitMsg {
+            type_prefix: "feat".to_string(),
+            description: String::new(),
+        };
+        policy.apply_to_type(&mut auto);
+        if !auto.type_prefix.is_empty() {
+            return auto.type_prefix;
+        }
+    }
+
+    infer_type_prefix(changes, policy)
+}
+
 /// Format a chat subject to follow Conventional Commit policy when required.
 pub fn format_chat_header(subject: &str, changes: &[FileChange], policy: &Policy) -> String {
     if policy.is_empty() {
@@ -391,7 +437,7 @@ pub fn format_chat_header(subject: &str, changes: &[FileChange], policy: &Policy
     let header = if has_conventional_prefix(subject, policy) {
         subject.to_string()
     } else {
-        let prefix = infer_type_prefix(changes, policy);
+        let prefix = infer_chat_type_prefix(subject, changes, policy);
         let formatted = format_subject_start(subject);
         format!("{prefix}: {formatted}")
     };
@@ -689,5 +735,43 @@ mod tests {
             format_chat_header("raw subject", &changes, &Policy::default()),
             "raw subject"
         );
+
+        // Subject with "add", "create", "implement" gets feat prefix even if changed files are docs
+        let doc_changes = [change('M', "README.md", "")];
+        assert_eq!(
+            format_chat_header(
+                "add option at \"mm.json\" file that auto commit with only `mm` CLI - no",
+                &doc_changes,
+                &policy
+            ),
+            "feat: add option at \"mm.json\" file that auto commit with only `mm` CLI - no"
+        );
+        assert_eq!(
+            format_chat_header("create unit test from xlsx", &doc_changes, &policy),
+            "feat: create unit test from xlsx"
+        );
+        assert_eq!(
+            format_chat_header("implement auto-add option", &doc_changes, &policy),
+            "feat: implement auto-add option"
+        );
+        // Without feat keywords, doc_changes infers docs
+        assert_eq!(
+            format_chat_header("refresh guide contents", &doc_changes, &policy),
+            "docs: refresh guide contents"
+        );
+    }
+
+    #[test]
+    fn detects_feat_keywords() {
+        assert!(includes_feat_keyword("add option at mm.json"));
+        assert!(includes_feat_keyword("Add option at mm.json"));
+        assert!(includes_feat_keyword("create unit test"));
+        assert!(includes_feat_keyword("creating new components"));
+        assert!(includes_feat_keyword("implement auto-add"));
+        assert!(includes_feat_keyword("implementation of cache"));
+        assert!(includes_feat_keyword("please add support for codex"));
+        assert!(!includes_feat_keyword("address issue in parser"));
+        assert!(!includes_feat_keyword("fix bug in login"));
+        assert!(!includes_feat_keyword("update README.md"));
     }
 }
