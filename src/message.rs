@@ -123,7 +123,10 @@ pub fn named_files_desc(changes: &[FileChange]) -> String {
         Err(_) => return count_files_desc(changes),
     };
 
-    let paths: Vec<String> = changes.iter().map(|change| change.from.clone()).collect();
+    let paths: Vec<String> = changes
+        .iter()
+        .map(|change| change.from.to_string())
+        .collect();
 
     format!("{} {}", action.as_str(), human_list(&paths))
 }
@@ -133,8 +136,8 @@ mod tests {
     use super::*;
     use crate::git::FileChange;
 
-    fn change(x: char, from: &str, to: &str) -> FileChange {
-        FileChange::new(x, from, to)
+    fn change(x: char, from: &str, to: &str) -> FileChange<'static> {
+        FileChange::new(x, from.to_string(), to.to_string())
     }
 
     #[test]

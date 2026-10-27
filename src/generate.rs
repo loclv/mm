@@ -492,8 +492,8 @@ mod tests {
     use super::*;
     use crate::git::FileChange;
 
-    fn change(x: char, from: &str, to: &str) -> FileChange {
-        FileChange::new(x, from, to)
+    fn change(x: char, from: &str, to: &str) -> FileChange<'static> {
+        FileChange::new(x, from.to_string(), to.to_string())
     }
 
     fn single(x: char, path: &str) -> String {

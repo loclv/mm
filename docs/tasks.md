@@ -12,7 +12,7 @@ Expand and refine transcript parsing for developer AI environments.
   - Parse chat transcripts from Cursor workspace storage / state databases.
   - Auto-detect when working inside Cursor sessions.
   - CLI flags: `--cursor`, `--cursor-session <ID>`.
-- [ ] Windsurf / Codeium Support `[Priority: Medium]`
+- [ ] Devin / Codeium Support `[Priority: Medium]`
   - Support reading Cascade / Devin transcript logs.
   - CLI flags: `--devin`, `--devin-session <ID>`.
 - [ ] Aider Chat History Support `[Priority: Medium]`
@@ -94,8 +94,8 @@ Streamline command-line ergonomics and developer workflows.
 
 ## 5. Performance, Infrastructure & Distribution
 
-- [ ] Zero-Copy Git Status Parsing `[Priority: Low]`
-  - Benchmark and optimize NUL-separated change list parsing for massive commits (1,000+ files).
+- [x] Zero-Copy Git Status Parsing `[Priority: Low]`
+  - Zero-copy NUL-separated change list parsing with `Cow<'a, str>`, `unsafe` UTF-8 conversion fast paths, and `Arc<[u8]>` pinned backing buffers for massive commits (1,000+ files).
 - [x] Pre-built Binaries & Packaging `[Priority: Medium]`
   - GitHub Actions release pipeline for cross-compiling Linux (x86_64, aarch64), macOS (Intel, Apple Silicon), and Windows.
   - Publish to `cargo-binstall` and Homebrew tap.
