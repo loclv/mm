@@ -255,8 +255,10 @@ impl ConventionalCommit {
     }
 
     /// Whether the file is documentation.
-    fn is_docs_related(&self) -> bool {
-        self.extension == ".rst"
+    pub fn is_docs_related(&self) -> bool {
+        self.extension.eq_ignore_ascii_case(".md")
+            || self.extension.eq_ignore_ascii_case(".markdown")
+            || self.extension.eq_ignore_ascii_case(".rst")
             || DOC_NAMES.contains(&self.name.to_lowercase().as_str())
             || self.dir_path.starts_with("docs")
     }
@@ -364,7 +366,12 @@ pub fn get_convention_type(action: Action, file_path: &str) -> ConventionalType 
         return ConventionalType::Chore;
     }
 
-    let commit_type = ConventionalCommit::new(file_path).get_type();
+    let commit = ConventionalCommit::new(file_path);
+    if commit.is_docs_related() {
+        return ConventionalType::Docs;
+    }
+
+    let commit_type = commit.get_type();
 
     if action == Action::Create && commit_type == ConventionalType::Unknown {
         return ConventionalType::Feat;
@@ -408,6 +415,9 @@ mod tests {
             ConventionalType::Docs
         );
         assert_eq!(prefix('M', "notes.rst"), ConventionalType::Docs);
+        assert_eq!(prefix('A', "guide.md"), ConventionalType::Docs);
+        assert_eq!(prefix('M', "guide.md"), ConventionalType::Docs);
+        assert_eq!(prefix('A', "RFC.markdown"), ConventionalType::Docs);
     }
 
     #[test]

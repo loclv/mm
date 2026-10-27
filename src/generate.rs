@@ -88,6 +88,22 @@ pub fn collapse(types: &[ConventionalType]) -> ConventionalType {
     }
 }
 
+/// Whether a file path is a markdown file (.md or .markdown).
+pub fn is_markdown_file(path: &str) -> bool {
+    let lower = path.to_ascii_lowercase();
+    lower.ends_with(".md") || lower.ends_with(".markdown")
+}
+
+/// Whether a file change is for a markdown file.
+pub fn is_markdown_change(change: &FileChange) -> bool {
+    is_markdown_file(&change.from) && (change.to.is_empty() || is_markdown_file(&change.to))
+}
+
+/// Whether all file changes in the list are markdown files.
+pub fn all_markdown_files(changes: &[FileChange]) -> bool {
+    !changes.is_empty() && changes.iter().all(is_markdown_change)
+}
+
 /// Generate the prefix and description for a few named changes.
 pub fn msg_named(changes: &[FileChange]) -> Result<ConvCommitMsg, String> {
     let types: Vec<ConventionalType> = changes
@@ -95,8 +111,14 @@ pub fn msg_named(changes: &[FileChange]) -> Result<ConvCommitMsg, String> {
         .map(prefix_from_change)
         .collect::<Result<_, _>>()?;
 
+    let type_prefix = if all_markdown_files(changes) {
+        "docs".to_string()
+    } else {
+        collapse(&types).as_str().to_string()
+    };
+
     Ok(ConvCommitMsg {
-        type_prefix: collapse(&types).as_str().to_string(),
+        type_prefix,
         description: named_files_desc(changes),
     })
 }
@@ -116,8 +138,14 @@ pub fn msg_count(changes: &[FileChange]) -> ConvCommitMsg {
         })
         .collect();
 
+    let type_prefix = if all_markdown_files(changes) {
+        "docs".to_string()
+    } else {
+        collapse(&types).as_str().to_string()
+    };
+
     ConvCommitMsg {
-        type_prefix: collapse(&types).as_str().to_string(),
+        type_prefix,
         description: count_files_desc(changes),
     }
 }
@@ -342,7 +370,9 @@ pub fn has_conventional_prefix(header: &str, policy: &Policy) -> bool {
 pub fn infer_type_prefix(changes: &[FileChange], policy: &Policy) -> String {
     let mut auto = msg_from_changes(changes).unwrap_or_else(|_| msg_count(changes));
 
-    if auto.type_prefix.is_empty() {
+    if all_markdown_files(changes) {
+        auto.type_prefix = "docs".to_string();
+    } else if auto.type_prefix.is_empty() {
         let types: Vec<ConventionalType> = changes
             .iter()
             .filter_map(|c| {
@@ -410,10 +440,22 @@ pub fn includes_feat_keyword(text: &str) -> bool {
 
 /// Infer the Conventional Commit type/scope prefix for a chat message.
 ///
-/// When the chat subject/message includes "add", "create", or "implement",
+/// When all changed files are markdown files, the prefix is "docs".
+/// Otherwise, when the chat subject/message includes "add", "create", or "implement",
 /// the prefix is "feat". Otherwise, it falls back to inferring the type from
 /// the changed files.
 pub fn infer_chat_type_prefix(subject: &str, changes: &[FileChange], policy: &Policy) -> String {
+    if all_markdown_files(changes) {
+        let mut auto = ConvCommitMsg {
+            type_prefix: "docs".to_string(),
+            description: String::new(),
+        };
+        policy.apply_to_type(&mut auto);
+        if !auto.type_prefix.is_empty() {
+            return auto.type_prefix;
+        }
+    }
+
     if includes_feat_keyword(subject) {
         let mut auto = ConvCommitMsg {
             type_prefix: "feat".to_string(),
@@ -736,7 +778,7 @@ mod tests {
             "raw subject"
         );
 
-        // Subject with "add", "create", "implement" gets feat prefix even if changed files are docs
+        // When all changed files are markdown, it uses docs prefix even with feat keywords
         let doc_changes = [change('M', "README.md", "")];
         assert_eq!(
             format_chat_header(
@@ -744,20 +786,38 @@ mod tests {
                 &doc_changes,
                 &policy
             ),
-            "feat: add option at \"mm.json\" file that auto commit with only `mm` CLI - no"
+            "docs: add option at \"mm.json\" file that auto commit with only `mm` CLI - no"
         );
         assert_eq!(
             format_chat_header("create unit test from xlsx", &doc_changes, &policy),
-            "feat: create unit test from xlsx"
+            "docs: create unit test from xlsx"
         );
         assert_eq!(
             format_chat_header("implement auto-add option", &doc_changes, &policy),
-            "feat: implement auto-add option"
+            "docs: implement auto-add option"
         );
-        // Without feat keywords, doc_changes infers docs
         assert_eq!(
             format_chat_header("refresh guide contents", &doc_changes, &policy),
             "docs: refresh guide contents"
+        );
+
+        // When changes include code files, feat keywords produce feat prefix
+        let code_changes = [change('M', "src/cli.rs", "")];
+        assert_eq!(
+            format_chat_header(
+                "add option at \"mm.json\" file that auto commit with only `mm` CLI - no",
+                &code_changes,
+                &policy
+            ),
+            "feat: add option at \"mm.json\" file that auto commit with only `mm` CLI - no"
+        );
+        assert_eq!(
+            format_chat_header("create unit test from xlsx", &code_changes, &policy),
+            "feat: create unit test from xlsx"
+        );
+        assert_eq!(
+            format_chat_header("implement auto-add option", &code_changes, &policy),
+            "feat: implement auto-add option"
         );
     }
 

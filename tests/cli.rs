@@ -1325,7 +1325,7 @@ fn chat_auto_adds_commitlint_prefix_when_commitlint_is_configured() {
 }
 
 #[test]
-fn chat_infers_feat_prefix_when_log_includes_feat_keywords() {
+fn chat_uses_docs_prefix_when_all_changes_are_markdown_even_with_feat_keywords() {
     let repo = Repo::new();
     repo.write(
         ".commitlintrc.json",
@@ -1333,9 +1333,45 @@ fn chat_infers_feat_prefix_when_log_includes_feat_keywords() {
   "extends": ["@commitlint/config-conventional"]
 }"#,
     );
-    // Modified file is a doc file, which would normally infer `docs:`
     repo.write("README.md", "# updated docs\n");
     repo.git(&["add", "README.md"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-docs-md-{}", std::process::id()));
+    let conv_dir = brain.join("conv-docs-md");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let transcript = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nadd option at \"mm.json\" file that auto commit with only `mm` CLI\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Added the option."}
+"#;
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--agy", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "docs: add option at \"mm.json\" file that auto commit with only `mm` CLI\n\nAdded the option."
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
+fn chat_infers_feat_prefix_when_log_includes_feat_keywords_and_code_changes() {
+    let repo = Repo::new();
+    repo.write(
+        ".commitlintrc.json",
+        r#"{
+  "extends": ["@commitlint/config-conventional"]
+}"#,
+    );
+    repo.write("src/cli.rs", "// modified\n");
+    repo.git(&["add", "src/cli.rs"]);
 
     let brain =
         std::env::temp_dir().join(format!("mm-test-brain-feat-keyword-{}", std::process::id()));
@@ -1361,4 +1397,38 @@ fn chat_infers_feat_prefix_when_log_includes_feat_keywords() {
     );
 
     let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
+fn all_markdown_files_use_docs_prefix() {
+    let repo = Repo::new();
+    repo.write("guide.md", "# Guide\n");
+    repo.write("deploy.markdown", "# Deploy\n");
+    repo.git(&["add", "guide.md", "deploy.markdown"]);
+
+    let output = repo.mm(&["--print"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "docs: create deploy.markdown and guide.md");
+}
+
+#[test]
+fn all_markdown_files_created_updated_deleted_use_docs_prefix() {
+    let repo = Repo::new();
+    repo.write("old.md", "# Old\n");
+    repo.write("edit.md", "# Edit\n");
+    repo.git(&["add", "old.md", "edit.md"]);
+    repo.git(&["commit", "-m", "docs: initial docs"]);
+
+    repo.write("edit.md", "# Edit updated\n");
+    repo.write("created.md", "# Created\n");
+    repo.git(&["rm", "old.md"]);
+    repo.git(&["add", "edit.md", "created.md"]);
+
+    let output = repo.mm(&["--print"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "docs: create 1 file, update 1 file and delete 1 file"
+    );
 }
