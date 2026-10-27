@@ -38,6 +38,10 @@ pub struct Options {
     pub chat: bool,
     /// Force copying from Antigravity.
     pub antigravity: bool,
+    /// Force copying from Claude Code.
+    pub claude: bool,
+    /// Force copying from Codex.
+    pub codex: bool,
     /// Chat session or conversation ID to copy; implies `chat`.
     pub chat_session: Option<String>,
     /// Explicit commitlint configuration file.
@@ -69,10 +73,11 @@ Messages follow Conventional Commits by default. Add `mm.json` with
 {\"conventionalCommits\": false} to generate plain descriptions instead.
 
 Pass --chat to copy the title and last assistant message from the current
-OpenCode or Antigravity session instead; chat messages are not reshaped by
-commitlint. If copying from chat fails, mm automatically falls back to
-auto commit message generation. Use --chat-session <ID> to select a different
-session, or --agy to copy from the latest Antigravity log.
+OpenCode, Antigravity, Claude Code, or Codex session instead; chat messages are not
+reshaped by commitlint. If copying from chat fails, mm automatically falls back
+to auto commit message generation. Use --chat-session <ID> to select a different
+session, --agy to copy from Antigravity, --claude to copy from Claude Code, or --codex
+to copy from Codex.
 
 Options:
   -a, --add              Stage all changes, including untracked files, first
@@ -80,10 +85,14 @@ Options:
   -p, --print            Print the generated message and exit without committing
   -d, --dry-run          Alias for --print
   -m, --message <MSG>    Merge the generated description (or override a chat subject)
-      --chat             Copy the chat title and last message (OpenCode or Antigravity)
+      --chat             Copy the chat title and last message (OpenCode, Antigravity, Claude Code, or Codex)
       --chat-session <ID>  Use a specific session ID or transcript path (implies --chat)
       --agy, --antigravity Copy the Antigravity last log commit message (implies --chat)
       --agy-session <ID>   Use a specific Antigravity conversation (implies --agy)
+      --claude           Copy the Claude Code last log commit message (implies --chat)
+      --claude-session <ID> Use a specific Claude Code session (implies --claude)
+      --codex            Copy the Codex last log commit message (implies --chat)
+      --codex-session <ID>  Use a specific Codex session (implies --codex)
   -c, --config <FILE>    Use this commitlint configuration instead of searching
   -s, --staged           Only use staged changes; never fall back to unstaged
       --no-verify        Bypass Git commit hooks
@@ -98,6 +107,8 @@ Examples:
   mm --add               Include new files, then commit
   mm --chat --print      Preview the message copied from the current chat
   mm --agy --print       Preview the message copied from Antigravity's last log
+  mm --claude --print    Preview the message copied from Claude Code's last log
+  mm --codex --print     Preview the message copied from Codex's last log
   mm -m 'JIRA-1: fix'    Keep the existing prefix/description
 ";
 
@@ -140,6 +151,32 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
                 options.antigravity = true;
                 options.chat_session = Some(value.clone());
             }
+            "--claude" => {
+                options.chat = true;
+                options.claude = true;
+            }
+            "--claude-session" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| format!("`{arg}` requires a value"))?;
+                options.chat = true;
+                options.claude = true;
+                options.chat_session = Some(value.clone());
+            }
+            "--codex" => {
+                options.chat = true;
+                options.codex = true;
+            }
+            "--codex-session" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| format!("`{arg}` requires a value"))?;
+                options.chat = true;
+                options.codex = true;
+                options.chat_session = Some(value.clone());
+            }
             "--chat-session" => {
                 index += 1;
                 let value = args
@@ -167,6 +204,16 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
                 options.chat = true;
                 options.antigravity = true;
                 options.chat_session = Some(arg["--agy-session=".len()..].to_string());
+            }
+            _ if arg.starts_with("--claude-session=") => {
+                options.chat = true;
+                options.claude = true;
+                options.chat_session = Some(arg["--claude-session=".len()..].to_string());
+            }
+            _ if arg.starts_with("--codex-session=") => {
+                options.chat = true;
+                options.codex = true;
+                options.chat_session = Some(arg["--codex-session=".len()..].to_string());
             }
             _ if arg.starts_with("--chat-session=") => {
                 options.chat = true;
@@ -230,6 +277,8 @@ pub fn execute(options: &Options) -> Result<(), String> {
             options.chat_session.as_deref(),
             Some(&directory),
             options.antigravity,
+            options.claude,
+            options.codex,
             options.verbose,
         );
 
@@ -399,6 +448,8 @@ mod tests {
                 message: None,
                 chat: false,
                 antigravity: false,
+                claude: false,
+                codex: false,
                 chat_session: None,
                 config: None,
                 staged_only: true,
@@ -483,12 +534,60 @@ mod tests {
                 ..Options::default()
             })
         );
+
+        assert_eq!(
+            parse_args(&args(&["--claude"])).unwrap(),
+            Command::Run(Options {
+                chat: true,
+                claude: true,
+                ..Options::default()
+            })
+        );
+
+        let claude_space = parse_args(&args(&["--claude-session", "claude_test"])).unwrap();
+        let claude_equals = parse_args(&args(&["--claude-session=claude_test"])).unwrap();
+
+        assert_eq!(claude_space, claude_equals);
+        assert_eq!(
+            claude_space,
+            Command::Run(Options {
+                chat: true,
+                claude: true,
+                chat_session: Some("claude_test".to_string()),
+                ..Options::default()
+            })
+        );
+
+        assert_eq!(
+            parse_args(&args(&["--codex"])).unwrap(),
+            Command::Run(Options {
+                chat: true,
+                codex: true,
+                ..Options::default()
+            })
+        );
+
+        let codex_space = parse_args(&args(&["--codex-session", "codex_test"])).unwrap();
+        let codex_equals = parse_args(&args(&["--codex-session=codex_test"])).unwrap();
+
+        assert_eq!(codex_space, codex_equals);
+        assert_eq!(
+            codex_space,
+            Command::Run(Options {
+                chat: true,
+                codex: true,
+                chat_session: Some("codex_test".to_string()),
+                ..Options::default()
+            })
+        );
     }
 
     #[test]
     fn rejects_a_missing_chat_session() {
         assert!(parse_args(&args(&["--chat-session"])).is_err());
         assert!(parse_args(&args(&["--agy-session"])).is_err());
+        assert!(parse_args(&args(&["--claude-session"])).is_err());
+        assert!(parse_args(&args(&["--codex-session"])).is_err());
     }
 
     #[test]

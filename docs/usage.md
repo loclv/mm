@@ -68,10 +68,14 @@ mm # generate and commit
 | `-p`, `--print` | Print the message and exit; never commit |
 | `-d`, `--dry-run` | Alias for `--print` |
 | `-m`, `--message <MSG>` | Merge the generated description with an existing message, or override the chat subject |
-| `--chat` | Copy the chat title and last message (OpenCode or Antigravity) |
+| `--chat` | Copy the chat title and last message (OpenCode, Antigravity, or Claude Code) |
 | `--chat-session <ID>` | Use a specific session ID or transcript path; implies `--chat` |
 | `--agy`, `--antigravity` | Copy the Antigravity last log commit message; implies `--chat` |
 | `--agy-session <ID>` | Use a specific Antigravity conversation or transcript; implies `--agy` |
+| `--claude` | Copy the Claude Code last log commit message; implies `--chat` |
+| `--claude-session <ID>` | Use a specific Claude Code session or transcript; implies `--claude` |
+| `--codex` | Copy the Codex last log commit message; implies `--chat` |
+| `--codex-session <ID>` | Use a specific Codex session or transcript; implies `--codex` |
 | `-c`, `--config <FILE>` | Use a specific commitlint config instead of searching |
 | `-s`, `--staged` | Only use staged changes; never fall back to unstaged changes |
 | `--no-verify` | Bypass Git commit hooks |
@@ -134,16 +138,20 @@ commitlint rules still apply.
 directory, the same way commitlint configuration is found. `--config` is
 unrelated: it overrides the commitlint configuration file.
 
-## Using an OpenCode or Antigravity chat
+## Using an OpenCode, Antigravity, Claude Code, or Codex chat
 
 `mm` can extract the commit message directly from local assistant chats:
 - **OpenCode**: OpenCode exports sessions using its `opencode` CLI. When `mm` runs inside an OpenCode session, `OPENCODE_SESSION_ID` identifies the current chat.
 - **Antigravity**: Antigravity saves conversation transcripts in `~/.gemini/antigravity-ide/brain/<ID>/.system_generated/logs/transcript.jsonl`. When running inside Antigravity (or when `ANTIGRAVITY_CONVERSATION_ID` is set), or via `--agy`, `mm` reads the conversation log.
+- **Claude Code**: Claude Code saves session transcripts in `~/.claude/projects/<encoded-project-path>/<session-id>.jsonl` (or under `CLAUDE_CONFIG_DIR`). When running inside Claude Code (or when `CLAUDE_SESSION_ID` is set), or via `--claude`, `mm` reads the session log.
+- **Codex**: OpenAI Codex saves session transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.zst` (or `.jsonl`, under `CODEX_HOME`). When running inside Codex (or when `CODEX_SESSION_ID` is set), or via `--codex`, `mm` reads the session log.
 
 ```sh
-mm --chat --print # preview copied message (auto-detects OpenCode or Antigravity)
-mm --agy --print  # preview message from the latest Antigravity log
-mm --agy          # commit using the latest Antigravity log
+mm --chat --print   # preview copied message (auto-detects OpenCode, Antigravity, Claude Code, or Codex)
+mm --agy --print    # preview message from the latest Antigravity log
+mm --claude --print # preview message from the latest Claude Code log
+mm --codex --print  # preview message from the latest Codex log
+mm --codex          # commit using the latest Codex log
 ```
 
 The message is built like this:
@@ -151,12 +159,17 @@ The message is built like this:
 - **Subject**:
   - For OpenCode, the session title is used (or the first line of the latest user prompt, truncated to 72 characters, if untitled).
   - For Antigravity, the first line of the latest user request (extracted from `<USER_REQUEST>` and stripped of `@` file references) is used, truncated to 72 characters. If absent, the first line of the assistant message is used.
-- **Body**: The last assistant response (`PLANNER_RESPONSE` or OpenCode assistant text message). Tool calls, reasoning, and metadata are excluded.
+  - For Claude Code, the first line of the latest user prompt is used, truncated to 72 characters (tool execution results are skipped). If absent, the first line of the assistant message is used.
+  - For Codex, the thread title from `session_index.jsonl` is used if available; otherwise the first line of the latest user prompt is used, truncated to 72 characters. If absent, the first line of the assistant message is used.
+- **Body**: The last assistant response (`PLANNER_RESPONSE`, Claude Code text message, Codex assistant message/task completion, or OpenCode assistant text message). Tool calls, reasoning/thinking, and metadata are excluded.
 - `--agy` or `--antigravity` forces copying from Antigravity logs.
-- `--agy-session <ID>` or `--chat-session <ID>` selects a specific session or transcript path and implies `--chat`.
+- `--claude` forces copying from Claude Code logs.
+- `--codex` forces copying from Codex logs.
+- `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path and implies `--chat`.
 - `--message` overrides the subject; the copied assistant message remains the body.
+- **Privacy sanitization**: Absolute user file links (such as `file:///Users/user/...` or `file:///home/user/...`) copied from chat logs are automatically replaced with `~/...` to prevent leaking local user names in commit messages.
 
-`--chat` / `--agy` skips path-based generation, `mm.json` formatting, and commitlint
+`--chat` / `--agy` / `--claude` / `--codex` skips path-based generation, `mm.json` formatting, and commitlint
 message shaping when a chat log is successfully loaded. If copying the log from
 the AI Agent fails (for example, missing session, no transcript found, CLI failure,
 or empty messages), `mm` automatically falls back to path-based commit message
@@ -175,7 +188,7 @@ configs are evaluated with `node`; `extends` presets additionally require
 Applied rules are the ones that affect the generated header: type and scope
 enums/case, type/scope presence, type/header/subject length, and trailing full
 stops. Rules for bodies, footers, and trailers are not applied to generated
-messages because `mm` writes only a one-line header. `--chat` and `--agy` copy a
+messages because `mm` writes only a one-line header. `--chat`, `--agy`, `--claude`, and `--codex` copy a
 multi-line message and bypass these generation rules.
 
 Use an explicit config with:

@@ -891,3 +891,294 @@ fn chat_auto_detects_antigravity_when_opencode_not_set() {
 
     let _ = fs::remove_dir_all(brain);
 }
+
+#[test]
+fn copies_antigravity_log_sanitizing_user_file_urls() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-sanitize-{}", std::process::id()));
+    let conv_dir = brain.join("conv-sanitize");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let transcript = format!(
+        r#"{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nfix file:///Users/secret_agent/project/foo.txt\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: {}\n</ADDITIONAL_METADATA>"}}
+{{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Updated [foo.txt](file:///Users/secret_agent/project/foo.txt).\n\nSee file:///Users/secret_agent/project/foo.txt for changes."}}
+"#,
+        repo.path().display()
+    );
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--agy", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "fix ~/project/foo.txt\n\nUpdated [foo.txt](~/project/foo.txt).\n\nSee ~/project/foo.txt for changes."
+    );
+    assert!(!stdout(&output).contains("secret_agent"));
+
+    let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
+fn copies_claude_last_log_with_claude_flag() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let claude_dir = std::env::temp_dir().join(format!("mm-test-claude-{}", std::process::id()));
+    let encoded = mm::chat::encode_claude_project_path(repo.path());
+    let proj_dir = claude_dir.join("projects").join(&encoded);
+    fs::create_dir_all(&proj_dir).unwrap();
+
+    let transcript = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"support claude code logs"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Added Claude Code log support."}]}}
+"#;
+    fs::write(proj_dir.join("sess-123.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--claude", "--print"],
+        &[("CLAUDE_CONFIG_DIR", &claude_dir.to_string_lossy())],
+        &["CLAUDE_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "support claude code logs\n\nAdded Claude Code log support."
+    );
+
+    let _ = fs::remove_dir_all(claude_dir);
+}
+
+#[test]
+fn copies_claude_log_with_claude_session() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let claude_dir =
+        std::env::temp_dir().join(format!("mm-test-claude-sess-{}", std::process::id()));
+    let encoded = mm::chat::encode_claude_project_path(repo.path());
+    let proj_dir = claude_dir.join("projects").join(&encoded);
+    fs::create_dir_all(&proj_dir).unwrap();
+
+    let transcript = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"fix claude session"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Fixed claude session."}]}}
+"#;
+    fs::write(proj_dir.join("my-specific-claude.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--claude-session", "my-specific-claude", "--print"],
+        &[("CLAUDE_CONFIG_DIR", &claude_dir.to_string_lossy())],
+        &["CLAUDE_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "fix claude session\n\nFixed claude session."
+    );
+
+    let _ = fs::remove_dir_all(claude_dir);
+}
+
+#[test]
+fn chat_auto_detects_claude_when_others_not_set() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let claude_dir =
+        std::env::temp_dir().join(format!("mm-test-claude-auto-{}", std::process::id()));
+    let encoded = mm::chat::encode_claude_project_path(repo.path());
+    let proj_dir = claude_dir.join("projects").join(&encoded);
+    fs::create_dir_all(&proj_dir).unwrap();
+
+    let transcript = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"auto detected claude prompt"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Auto detected claude response."}]}}
+"#;
+    fs::write(proj_dir.join("auto-sess.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[("CLAUDE_CONFIG_DIR", &claude_dir.to_string_lossy())],
+        &[
+            "OPENCODE_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+            "CLAUDE_SESSION_ID",
+            "CODEX_SESSION_ID",
+        ],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "auto detected claude prompt\n\nAuto detected claude response."
+    );
+
+    let _ = fs::remove_dir_all(claude_dir);
+}
+
+#[test]
+fn copies_codex_last_log_with_codex_flag() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let codex_dir = std::env::temp_dir().join(format!("mm-test-codex-{}", std::process::id()));
+    let sessions_dir = codex_dir
+        .join("sessions")
+        .join("2026")
+        .join("10")
+        .join("27");
+    fs::create_dir_all(&sessions_dir).unwrap();
+
+    let transcript = format!(
+        r#"{{"type":"session_meta","payload":{{"id":"019e274d-bfd2-7093-9ec4-13c38e1c66e7","cwd":"{}"}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"support codex code logs"}}]}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"Added OpenAI Codex log support."}}]}}}}
+"#,
+        repo.path().to_string_lossy()
+    );
+    fs::write(
+        sessions_dir.join("rollout-2026-10-27T00-00-00-019e274d-bfd2-7093-9ec4-13c38e1c66e7.jsonl"),
+        transcript,
+    )
+    .unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--codex", "--print"],
+        &[("CODEX_HOME", &codex_dir.to_string_lossy())],
+        &["CODEX_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "support codex code logs\n\nAdded OpenAI Codex log support."
+    );
+
+    let _ = fs::remove_dir_all(codex_dir);
+}
+
+#[test]
+fn copies_codex_log_with_codex_session() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let codex_dir = std::env::temp_dir().join(format!("mm-test-codex-sess-{}", std::process::id()));
+    let sessions_dir = codex_dir.join("sessions");
+    fs::create_dir_all(&sessions_dir).unwrap();
+
+    let transcript = r#"{"type":"session_meta","payload":{"id":"my-specific-codex","cwd":"/some/dir"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"fix codex session"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fixed codex session."}]}}
+"#;
+    fs::write(
+        sessions_dir.join("rollout-my-specific-codex.jsonl"),
+        transcript,
+    )
+    .unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--codex-session", "my-specific-codex", "--print"],
+        &[("CODEX_HOME", &codex_dir.to_string_lossy())],
+        &["CODEX_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "fix codex session\n\nFixed codex session.");
+
+    let _ = fs::remove_dir_all(codex_dir);
+}
+
+#[test]
+fn chat_auto_detects_codex_when_others_not_set() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let codex_dir = std::env::temp_dir().join(format!("mm-test-codex-auto-{}", std::process::id()));
+    let sessions_dir = codex_dir.join("sessions");
+    fs::create_dir_all(&sessions_dir).unwrap();
+
+    let transcript = format!(
+        r#"{{"type":"session_meta","payload":{{"id":"auto-codex-sess","cwd":"{}"}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"auto detected codex prompt"}}]}}}}
+{{"type":"event_msg","payload":{{"type":"task_complete","last_agent_message":"Auto detected codex response."}}}}
+"#,
+        repo.path().to_string_lossy()
+    );
+    fs::write(sessions_dir.join("rollout-auto-codex.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[("CODEX_HOME", &codex_dir.to_string_lossy())],
+        &[
+            "OPENCODE_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+            "CLAUDE_SESSION_ID",
+            "CODEX_SESSION_ID",
+        ],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "auto detected codex prompt\n\nAuto detected codex response."
+    );
+
+    let _ = fs::remove_dir_all(codex_dir);
+}
+
+#[test]
+fn copies_codex_session_with_title_from_session_index() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let codex_dir =
+        std::env::temp_dir().join(format!("mm-test-codex-index-{}", std::process::id()));
+    let sessions_dir = codex_dir.join("sessions");
+    fs::create_dir_all(&sessions_dir).unwrap();
+
+    let index_content = r#"{"id":"01a10459-bbd6-7f61-97ea-12a1ac1a7e91","thread_name":"Session Index Contributor Guide","updated_at":"2026-10-04T00:39:24.690019Z"}
+"#;
+    fs::write(codex_dir.join("session_index.jsonl"), index_content).unwrap();
+
+    let transcript = format!(
+        r#"{{"type":"session_meta","payload":{{"id":"01a10459-bbd6-7f61-97ea-12a1ac1a7e91","cwd":"{}"}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"Some prompt line"}}]}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"Created contributor guide."}}]}}}}
+"#,
+        repo.path().to_string_lossy()
+    );
+    fs::write(
+        sessions_dir.join("rollout-01a10459-bbd6-7f61-97ea-12a1ac1a7e91.jsonl"),
+        transcript,
+    )
+    .unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--codex", "--print"],
+        &[("CODEX_HOME", &codex_dir.to_string_lossy())],
+        &["CODEX_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "Session Index Contributor Guide\n\nCreated contributor guide."
+    );
+
+    let _ = fs::remove_dir_all(codex_dir);
+}

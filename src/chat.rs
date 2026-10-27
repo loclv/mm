@@ -1,4 +1,4 @@
-//! Copy a commit message from an OpenCode chat session.
+//! Copy a commit message from an OpenCode, Antigravity, Claude Code, or Codex chat session.
 //!
 //! OpenCode owns its session database, but it exposes a stable JSON export
 //! through `opencode session export <id>`. The export contains the session
@@ -6,6 +6,8 @@
 //! subject and copies the last assistant message as the body, matching
 //! OpenCode's `/copy` command. A completed compaction summary is copied when it
 //! is the last message. Tool calls, reasoning and system messages are skipped.
+//! Absolute user file paths in `file://` URIs (like `file:///Users/user/...`)
+//! are replaced with `~/...` to prevent leaking local user names.
 
 use std::fs::{self, OpenOptions};
 use std::io::BufRead;
@@ -26,6 +28,18 @@ pub const ANTIGRAVITY_SESSION_ENV: &str = "ANTIGRAVITY_CONVERSATION_ID";
 
 /// Environment variable for Antigravity brain directory override (useful for tests).
 pub const ANTIGRAVITY_BRAIN_ENV: &str = "ANTIGRAVITY_BRAIN_DIR";
+
+/// Environment variable for explicit Claude Code session ID.
+pub const CLAUDE_SESSION_ENV: &str = "CLAUDE_SESSION_ID";
+
+/// Environment variable for Claude configuration directory override (useful for tests).
+pub const CLAUDE_CONFIG_DIR_ENV: &str = "CLAUDE_CONFIG_DIR";
+
+/// Environment variable for explicit Codex session ID.
+pub const CODEX_SESSION_ENV: &str = "CODEX_SESSION_ID";
+
+/// Environment variable for Codex home directory override (useful for tests).
+pub const CODEX_HOME_ENV: &str = "CODEX_HOME";
 
 /// Longest fallback subject, in characters.
 const FALLBACK_SUBJECT_MAX: usize = 72;
@@ -69,6 +83,144 @@ impl ChatMessage {
 
         format!("{subject}\n\n{}", self.body)
     }
+}
+
+/// Check if a character acts as a path or markdown delimiter.
+fn is_path_delimiter(c: char) -> bool {
+    c.is_whitespace()
+        || matches!(
+            c,
+            '"' | '\'' | '`' | ')' | ']' | '>' | '}' | '<' | '\\' | ';' | ','
+        )
+}
+
+/// Strip a prefix case-insensitively.
+fn strip_prefix_case_insensitive<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    if s.len() >= prefix.len() && s[..prefix.len()].eq_ignore_ascii_case(prefix) {
+        Some(&s[prefix.len()..])
+    } else {
+        None
+    }
+}
+
+/// Try matching a user home directory path in the remainder after `file://`.
+/// Returns `(consumed_bytes, replacement)` on success.
+fn try_match_file_url(after_scheme: &str, home: Option<&str>) -> Option<(usize, &'static str)> {
+    let (rest, host_len) = if let Some(stripped) = after_scheme.strip_prefix("localhost") {
+        (stripped, "localhost".len())
+    } else {
+        (after_scheme, 0)
+    };
+
+    // Check custom $HOME if available
+    if let Some(home_path) = home
+        && let Some(after_home) = rest.strip_prefix(home_path)
+    {
+        if after_home.starts_with('/') {
+            return Some((host_len + home_path.len() + 1, "~/"));
+        } else if after_home.is_empty() || is_path_delimiter(after_home.chars().next().unwrap()) {
+            return Some((host_len + home_path.len(), "~"));
+        }
+    }
+
+    // Check Windows drive letter: e.g. `/C:/` or `C:/`
+    let (rest_after_drive, drive_len) = if rest.len() >= 4
+        && rest.as_bytes()[0] == b'/'
+        && rest.as_bytes()[1].is_ascii_alphabetic()
+        && rest.as_bytes()[2] == b':'
+        && rest.as_bytes()[3] == b'/'
+    {
+        (&rest[3..], 3)
+    } else if rest.len() >= 3
+        && rest.as_bytes()[0].is_ascii_alphabetic()
+        && rest.as_bytes()[1] == b':'
+        && rest.as_bytes()[2] == b'/'
+    {
+        (&rest[2..], 2)
+    } else {
+        (rest, 0)
+    };
+
+    // Check standard user directory prefixes
+    let known_prefixes = ["/Users/", "Users/", "/home/", "home/"];
+    let mut matched = None;
+
+    for prefix in &known_prefixes {
+        if let Some(after_prefix) = strip_prefix_case_insensitive(rest_after_drive, prefix) {
+            matched = Some((after_prefix, prefix.len()));
+            break;
+        }
+    }
+
+    let (after_prefix, matched_prefix_len) = matched?;
+    let prefix_total_len = host_len + drive_len + matched_prefix_len;
+
+    // Scan for username
+    let mut user_len = None;
+    let mut found_slash = false;
+
+    for (i, c) in after_prefix.char_indices() {
+        if c == '/' {
+            user_len = Some(i);
+            found_slash = true;
+            break;
+        }
+        if is_path_delimiter(c) {
+            user_len = Some(i);
+            break;
+        }
+    }
+
+    let user_len = user_len.unwrap_or(after_prefix.len());
+
+    if user_len == 0 {
+        return None;
+    }
+
+    if found_slash {
+        Some((prefix_total_len + user_len + 1, "~/"))
+    } else {
+        Some((prefix_total_len + user_len, "~"))
+    }
+}
+
+/// Replace user home file URIs (`file:///Users/<user>/...`, `file:///home/<user>/...`, etc.)
+/// with `~/...` so that local user names are not leaked into commit messages.
+pub fn sanitize_file_urls(text: &str) -> String {
+    if !text.contains("file://") {
+        return text.to_string();
+    }
+
+    let home = std::env::var("HOME").ok().and_then(|h| {
+        let trimmed = h.trim().trim_end_matches('/');
+        if trimmed.len() > 1 && trimmed != "/" {
+            Some(trimmed.to_string())
+        } else {
+            None
+        }
+    });
+
+    let mut result = String::with_capacity(text.len());
+    let mut cursor = 0;
+
+    while let Some(rel_pos) = text[cursor..].find("file://") {
+        let file_pos = cursor + rel_pos;
+        result.push_str(&text[cursor..file_pos]);
+
+        let after_scheme = &text[file_pos + "file://".len()..];
+
+        if let Some((consumed_len, replacement)) = try_match_file_url(after_scheme, home.as_deref())
+        {
+            result.push_str(replacement);
+            cursor = file_pos + "file://".len() + consumed_len;
+        } else {
+            result.push_str("file://");
+            cursor = file_pos + "file://".len();
+        }
+    }
+
+    result.push_str(&text[cursor..]);
+    result
 }
 
 /// Path to Antigravity's brain directory storing conversation transcripts.
@@ -279,7 +431,7 @@ pub fn parse_antigravity_reader<R: BufRead>(
                 if let Some(first) = first_line(&user_request) {
                     let cleaned = clean_prompt_line(&first);
                     if !cleaned.is_empty() {
-                        latest_prompt = Some(cleaned);
+                        latest_prompt = Some(sanitize_file_urls(&cleaned));
                     }
                 }
             }
@@ -290,7 +442,7 @@ pub fn parse_antigravity_reader<R: BufRead>(
                 .unwrap_or("")
                 .trim();
             if !text.is_empty() {
-                last_message = Some(text.to_string());
+                last_message = Some(sanitize_file_urls(text));
             }
         }
     }
@@ -317,8 +469,8 @@ pub fn parse_antigravity_reader<R: BufRead>(
 
     Ok(ChatMessage {
         session_id: conversation_id.to_string(),
-        subject,
-        body,
+        subject: sanitize_file_urls(&subject),
+        body: sanitize_file_urls(&body),
         subject_source,
     })
 }
@@ -340,20 +492,902 @@ pub fn load_antigravity(path: &Path, conversation_id: &str) -> Result<ChatMessag
     parse_antigravity_reader(reader, conversation_id)
 }
 
+/// Path to Claude Code's configuration directory.
+pub fn claude_config_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var(CLAUDE_CONFIG_DIR_ENV) {
+        let path = PathBuf::from(dir);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let claude = home.join(".claude");
+    if claude.is_dir() { Some(claude) } else { None }
+}
+
+/// Encode a filesystem path for Claude Code's project directory structure.
+pub fn encode_claude_project_path(path: &Path) -> String {
+    let s = path.to_string_lossy();
+    let trimmed = s.trim_end_matches('/');
+    let mut encoded = String::with_capacity(trimmed.len() + 1);
+    for c in trimmed.chars() {
+        if c.is_ascii_alphanumeric() {
+            encoded.push(c);
+        } else {
+            encoded.push('-');
+        }
+    }
+    encoded
+}
+
+/// Resolve a Claude Code session inside a given `.claude` directory.
+pub fn resolve_claude_session_in(claude_dir: &Path, session: &str) -> Option<(String, PathBuf)> {
+    let path = Path::new(session);
+    if path.is_file() {
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("claude")
+            .to_string();
+        return Some((name, path.to_path_buf()));
+    }
+    if path.is_dir() {
+        let mut candidates = Vec::new();
+        if let Ok(entries) = fs::read_dir(path) {
+            for entry in entries.flatten() {
+                let p = entry.path();
+                if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                    let mtime = fs::metadata(&p)
+                        .and_then(|m| m.modified())
+                        .unwrap_or(UNIX_EPOCH);
+                    let stem = p
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("claude")
+                        .to_string();
+                    candidates.push((mtime, stem, p));
+                }
+            }
+        }
+        candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+        if let Some((_, name, p)) = candidates.into_iter().next() {
+            return Some((name, p));
+        }
+    }
+
+    let projects_dir = claude_dir.join("projects");
+    if projects_dir.is_dir()
+        && let Ok(entries) = fs::read_dir(&projects_dir)
+    {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let direct = entry.path().join(format!("{session}.jsonl"));
+                if direct.is_file() {
+                    return Some((session.to_string(), direct));
+                }
+                let nested = entry
+                    .path()
+                    .join("sessions")
+                    .join(format!("{session}.jsonl"));
+                if nested.is_file() {
+                    return Some((session.to_string(), nested));
+                }
+            }
+        }
+    }
+
+    let direct_session = claude_dir.join("sessions").join(format!("{session}.jsonl"));
+    if direct_session.is_file() {
+        return Some((session.to_string(), direct_session));
+    }
+
+    None
+}
+
+/// Resolve a Claude Code session by session ID or file path.
+pub fn resolve_claude_session(session: &str) -> Option<(String, PathBuf)> {
+    let path = Path::new(session);
+    if path.is_file() {
+        let name = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("claude")
+            .to_string();
+        return Some((name, path.to_path_buf()));
+    }
+
+    let claude_dir = claude_config_dir()?;
+    resolve_claude_session_in(&claude_dir, session)
+}
+
+/// Collect .jsonl transcript files from a directory into candidates list.
+fn collect_claude_jsonl(dir: &Path, candidates: &mut Vec<(SystemTime, String, PathBuf)>) {
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let p = entry.path();
+            if p.is_file() && p.extension().and_then(|s| s.to_str()) == Some("jsonl") {
+                let stem = p
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("claude")
+                    .to_string();
+                let mtime = fs::metadata(&p)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(UNIX_EPOCH);
+                candidates.push((mtime, stem, p));
+            }
+        }
+    }
+}
+
+/// Find the latest Claude Code session log.
+pub fn find_latest_claude_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+    let claude_dir = claude_config_dir()?;
+    let projects_dir = claude_dir.join("projects");
+
+    let mut candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+
+    if let Some(root) = repo_root {
+        let encoded = encode_claude_project_path(root);
+        let project_folder = projects_dir.join(&encoded);
+        if project_folder.is_dir() {
+            collect_claude_jsonl(&project_folder, &mut candidates);
+            collect_claude_jsonl(&project_folder.join("sessions"), &mut candidates);
+        }
+
+        // Also check history.jsonl for sessions matching repo_root
+        let history_file = claude_dir.join("history.jsonl");
+        if let Ok(file) = fs::File::open(&history_file) {
+            let root_str = root.to_string_lossy();
+            let reader = std::io::BufReader::new(file);
+            let mut matching_sessions = Vec::new();
+            for line in reader.lines().map_while(Result::ok) {
+                if let Ok(val) = serde_json::from_str::<Value>(&line)
+                    && let Some(proj) = val.get("project").and_then(Value::as_str)
+                    && (proj == root_str.as_ref()
+                        || proj.starts_with(root_str.as_ref())
+                        || root_str.starts_with(proj))
+                    && let Some(sess_id) = val.get("sessionId").and_then(Value::as_str)
+                {
+                    matching_sessions.push(sess_id.to_string());
+                }
+            }
+
+            for sess in matching_sessions.iter().rev() {
+                if let Some((name, p)) = resolve_claude_session_in(&claude_dir, sess) {
+                    let mtime = fs::metadata(&p)
+                        .and_then(|m| m.modified())
+                        .unwrap_or(UNIX_EPOCH);
+                    candidates.push((mtime, name, p));
+                }
+            }
+        }
+    }
+
+    if candidates.is_empty()
+        && projects_dir.is_dir()
+        && let Ok(entries) = fs::read_dir(&projects_dir)
+    {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                collect_claude_jsonl(&entry.path(), &mut candidates);
+                collect_claude_jsonl(&entry.path().join("sessions"), &mut candidates);
+            }
+        }
+    }
+
+    let sessions_dir = claude_dir.join("sessions");
+    if sessions_dir.is_dir() {
+        collect_claude_jsonl(&sessions_dir, &mut candidates);
+    }
+
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+    candidates.dedup_by(|a, b| a.2 == b.2);
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let (_, name, log_path) = candidates.remove(0);
+    Some((name, log_path))
+}
+
+/// Extract visible text from a Claude Code message payload.
+fn extract_claude_text(value: &Value, is_user: bool) -> Option<String> {
+    let message = value.get("message").unwrap_or(value);
+    let content = message.get("content")?;
+
+    match content {
+        Value::String(s) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
+        }
+        Value::Array(blocks) => {
+            let mut texts = Vec::new();
+            for block in blocks {
+                let block_type = block.get("type").and_then(Value::as_str).unwrap_or("");
+                if block_type == "text" || (block_type.is_empty() && block.get("text").is_some()) {
+                    if let Some(t) = block.get("text").and_then(Value::as_str) {
+                        let trimmed = t.trim();
+                        if !trimmed.is_empty() {
+                            texts.push(trimmed);
+                        }
+                    }
+                } else if is_user && block_type == "tool_result" {
+                    // Tool execution results in user turns are not prompts
+                }
+            }
+
+            if texts.is_empty() {
+                None
+            } else {
+                Some(texts.join("\n"))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Parse a Claude Code transcript from a reader.
+pub fn parse_claude_reader<R: BufRead>(reader: R, session_id: &str) -> Result<ChatMessage, String> {
+    let mut latest_prompt: Option<String> = None;
+    let mut last_message: Option<String> = None;
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => continue,
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let value: Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let kind = value
+            .get("type")
+            .or_else(|| value.get("role"))
+            .and_then(Value::as_str)
+            .unwrap_or("");
+
+        if kind == "user" {
+            if let Some(text) = extract_claude_text(&value, true)
+                && let Some(first) = first_line(&text)
+            {
+                let cleaned = clean_prompt_line(&first);
+                if !cleaned.is_empty() {
+                    latest_prompt = Some(sanitize_file_urls(&cleaned));
+                }
+            }
+        } else if kind == "assistant"
+            && let Some(text) = extract_claude_text(&value, false)
+        {
+            last_message = Some(sanitize_file_urls(&text));
+        }
+    }
+
+    let body = last_message.ok_or_else(|| {
+        format!("Claude Code session `{session_id}` has no assistant response text to copy")
+    })?;
+
+    let (subject, subject_source) = match latest_prompt {
+        Some(prompt) => (
+            truncate(&prompt, FALLBACK_SUBJECT_MAX),
+            SubjectSource::LatestPrompt,
+        ),
+        None => {
+            let line = first_line(&body).unwrap_or_else(|| body.clone());
+            (
+                truncate(&line, FALLBACK_SUBJECT_MAX),
+                SubjectSource::LastMessage,
+            )
+        }
+    };
+
+    Ok(ChatMessage {
+        session_id: session_id.to_string(),
+        subject: sanitize_file_urls(&subject),
+        body: sanitize_file_urls(&body),
+        subject_source,
+    })
+}
+
+/// Parse a Claude Code transcript from a byte slice.
+pub fn parse_claude(transcript: &[u8], session_id: &str) -> Result<ChatMessage, String> {
+    parse_claude_reader(std::io::Cursor::new(transcript), session_id)
+}
+
+/// Load and parse a Claude Code transcript from disk.
+pub fn load_claude(path: &Path, session_id: &str) -> Result<ChatMessage, String> {
+    let file = fs::File::open(path).map_err(|error| {
+        format!(
+            "could not open Claude Code transcript {}: {error}",
+            path.display()
+        )
+    })?;
+    let reader = std::io::BufReader::new(file);
+    parse_claude_reader(reader, session_id)
+}
+
+/// Helper struct that holds an open reader and optional child process (for zstd).
+pub struct CodexFileStream {
+    reader: Box<dyn BufRead>,
+    child: Option<std::process::Child>,
+}
+
+impl BufRead for CodexFileStream {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        self.reader.fill_buf()
+    }
+
+    fn consume(&mut self, amt: usize) {
+        self.reader.consume(amt);
+    }
+}
+
+impl std::io::Read for CodexFileStream {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
+impl Drop for CodexFileStream {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+}
+
+/// Open a Codex session file, decompressing with `zstd` / `zstdcat` if `.zst`.
+pub fn open_codex_file(path: &Path) -> Result<CodexFileStream, String> {
+    let is_zst = path.extension().and_then(|s| s.to_str()) == Some("zst");
+
+    if is_zst {
+        let spawn_res = Command::new("zstd")
+            .args(["-dc"])
+            .arg(path)
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .or_else(|_| {
+                Command::new("zstdcat")
+                    .arg(path)
+                    .stdout(Stdio::piped())
+                    .stderr(Stdio::null())
+                    .spawn()
+            });
+
+        match spawn_res {
+            Ok(mut child) => {
+                let stdout = child.stdout.take().ok_or_else(|| {
+                    format!("failed to capture stdout from zstd for {}", path.display())
+                })?;
+                Ok(CodexFileStream {
+                    reader: Box::new(std::io::BufReader::new(stdout)),
+                    child: Some(child),
+                })
+            }
+            Err(e) => Err(format!(
+                "could not decompress Codex session {}: zstd or zstdcat command failed ({e})",
+                path.display()
+            )),
+        }
+    } else {
+        let file = fs::File::open(path)
+            .map_err(|error| format!("could not open Codex session {}: {error}", path.display()))?;
+        Ok(CodexFileStream {
+            reader: Box::new(std::io::BufReader::new(file)),
+            child: None,
+        })
+    }
+}
+
+/// Quick peek at the first few lines of a Codex transcript to extract (session_id, cwd).
+pub fn peek_codex_meta(path: &Path) -> Option<(Option<String>, Option<String>)> {
+    let mut stream = open_codex_file(path).ok()?;
+    let mut line = String::new();
+    for _ in 0..5 {
+        line.clear();
+        if stream.read_line(&mut line).unwrap_or(0) == 0 {
+            break;
+        }
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(val) = serde_json::from_str::<Value>(trimmed)
+            && val.get("type").and_then(Value::as_str) == Some("session_meta")
+        {
+            let id = val
+                .pointer("/payload/id")
+                .or_else(|| val.pointer("/payload/session_id"))
+                .and_then(Value::as_str)
+                .map(|s| s.to_string());
+            let cwd = val
+                .pointer("/payload/cwd")
+                .and_then(Value::as_str)
+                .map(|s| s.to_string());
+            return Some((id, cwd));
+        }
+    }
+    None
+}
+
+/// Path to Codex's home directory.
+pub fn codex_home_dir() -> Option<PathBuf> {
+    if let Ok(dir) = std::env::var(CODEX_HOME_ENV) {
+        let path = PathBuf::from(dir);
+        if path.is_dir() {
+            return Some(path);
+        }
+    }
+
+    let home = std::env::var_os("HOME").map(PathBuf::from)?;
+    let codex = home.join(".codex");
+    if codex.is_dir() { Some(codex) } else { None }
+}
+
+/// Load thread_name for a given session ID from `session_index.jsonl` in the Codex home dir.
+pub fn load_codex_thread_name(codex_dir: &Path, session_id: &str) -> Option<String> {
+    let index_file = codex_dir.join("session_index.jsonl");
+    let file = fs::File::open(index_file).ok()?;
+    let reader = std::io::BufReader::new(file);
+
+    for line in reader.lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if let Ok(val) = serde_json::from_str::<Value>(trimmed)
+            && let Some(id) = val.get("id").and_then(Value::as_str)
+            && (id == session_id || session_id.contains(id) || id.contains(session_id))
+            && let Some(name) = val.get("thread_name").and_then(Value::as_str)
+        {
+            let trimmed_name = name.trim();
+            if !trimmed_name.is_empty() && !is_placeholder_title(trimmed_name) {
+                return Some(trimmed_name.to_string());
+            }
+        }
+    }
+
+    None
+}
+
+fn collect_codex_files_rec(dir: &Path, depth: usize, candidates: &mut Vec<(SystemTime, PathBuf)>) {
+    if depth > 6 {
+        return;
+    }
+    if let Ok(entries) = fs::read_dir(dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_file() {
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if name.ends_with(".jsonl") || name.ends_with(".jsonl.zst") {
+                    let mtime = fs::metadata(&path)
+                        .and_then(|m| m.modified())
+                        .unwrap_or(UNIX_EPOCH);
+                    candidates.push((mtime, path));
+                }
+            } else if path.is_dir() {
+                collect_codex_files_rec(&path, depth + 1, candidates);
+            }
+        }
+    }
+}
+
+/// Recursively collect all `.jsonl` and `.jsonl.zst` files from a Codex directory.
+pub fn collect_codex_files(dir: &Path, candidates: &mut Vec<(SystemTime, PathBuf)>) {
+    collect_codex_files_rec(dir, 0, candidates);
+}
+
+/// Resolve a Codex session by session ID or file path.
+pub fn resolve_codex_session(session: &str) -> Option<(String, PathBuf)> {
+    let path = Path::new(session);
+    if path.is_file() {
+        let name = peek_codex_meta(path)
+            .and_then(|(id, _)| id)
+            .or_else(|| {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_else(|| "codex".to_string());
+        return Some((name, path.to_path_buf()));
+    }
+    if path.is_dir() {
+        let mut candidates = Vec::new();
+        collect_codex_files(path, &mut candidates);
+        candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+        if let Some((_, p)) = candidates.into_iter().next() {
+            let name = peek_codex_meta(&p)
+                .and_then(|(id, _)| id)
+                .or_else(|| {
+                    p.file_stem()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.to_string())
+                })
+                .unwrap_or_else(|| "codex".to_string());
+            return Some((name, p));
+        }
+    }
+
+    let codex_dir = codex_home_dir()?;
+    let mut candidates = Vec::new();
+
+    let sessions_dir = codex_dir.join("sessions");
+    if sessions_dir.is_dir() {
+        collect_codex_files(&sessions_dir, &mut candidates);
+    }
+    collect_codex_files(&codex_dir, &mut candidates);
+
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+    candidates.dedup_by(|a, b| a.1 == b.1);
+
+    // Look for exact ID match or filename containing session
+    for (_, candidate_path) in &candidates {
+        let fname = candidate_path
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if fname.contains(session) {
+            let id = peek_codex_meta(candidate_path)
+                .and_then(|(id, _)| id)
+                .unwrap_or_else(|| session.to_string());
+            return Some((id, candidate_path.clone()));
+        }
+    }
+
+    // Check session_index.jsonl for matching id
+    let index_file = codex_dir.join("session_index.jsonl");
+    if let Ok(file) = fs::File::open(index_file) {
+        let reader = std::io::BufReader::new(file);
+        for line in reader.lines().map_while(Result::ok) {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(val) = serde_json::from_str::<Value>(trimmed)
+                && let Some(id) = val.get("id").and_then(Value::as_str)
+                && (id == session || id.starts_with(session) || session.starts_with(id))
+            {
+                for (_, candidate_path) in &candidates {
+                    let fname = candidate_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("");
+                    if fname.contains(id) {
+                        return Some((id.to_string(), candidate_path.clone()));
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Find the latest Codex session log, prioritizing sessions matching `repo_root`.
+pub fn find_latest_codex_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+    let codex_dir = codex_home_dir()?;
+    let mut candidates = Vec::new();
+
+    let sessions_dir = codex_dir.join("sessions");
+    if sessions_dir.is_dir() {
+        collect_codex_files(&sessions_dir, &mut candidates);
+    }
+    collect_codex_files(&codex_dir, &mut candidates);
+
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+    candidates.dedup_by(|a, b| a.1 == b.1);
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    if let Some(root) = repo_root {
+        let root_str = root.to_string_lossy();
+        for (_, path) in &candidates {
+            if let Some((id_opt, Some(cwd))) = peek_codex_meta(path)
+                && (cwd == root_str.as_ref()
+                    || cwd.starts_with(root_str.as_ref())
+                    || root_str.starts_with(&cwd))
+            {
+                let name = id_opt.unwrap_or_else(|| {
+                    path.file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("codex")
+                        .to_string()
+                });
+                return Some((name, path.clone()));
+            }
+        }
+    }
+
+    let (_, path) = candidates.remove(0);
+    let name = peek_codex_meta(&path)
+        .and_then(|(id, _)| id)
+        .unwrap_or_else(|| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("codex")
+                .to_string()
+        });
+    Some((name, path))
+}
+
+/// Extract text content from a Codex message payload or AgentMessage item.
+fn extract_codex_text(value: &Value) -> Option<String> {
+    if let Some(content) = value.get("content") {
+        match content {
+            Value::String(s) => {
+                let trimmed = s.trim();
+                if !trimmed.is_empty() {
+                    return Some(trimmed.to_string());
+                }
+            }
+            Value::Array(items) => {
+                let mut parts = Vec::new();
+                for item in items {
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        let trimmed = text.trim();
+                        if !trimmed.is_empty() {
+                            parts.push(trimmed);
+                        }
+                    } else if let Some(s) = item.as_str() {
+                        let trimmed = s.trim();
+                        if !trimmed.is_empty() {
+                            parts.push(trimmed);
+                        }
+                    }
+                }
+                if !parts.is_empty() {
+                    return Some(parts.join("\n"));
+                }
+            }
+            _ => {}
+        }
+    }
+    if let Some(msg) = value.get("last_agent_message").and_then(Value::as_str) {
+        let trimmed = msg.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+    None
+}
+
+/// Parse a Codex session transcript from a reader.
+pub fn parse_codex_reader<R: BufRead>(
+    reader: R,
+    session_id: &str,
+    thread_name: Option<&str>,
+) -> Result<ChatMessage, String> {
+    let mut latest_prompt: Option<String> = None;
+    let mut last_message: Option<String> = None;
+    let mut inferred_session_id: Option<String> = None;
+
+    for line in reader.lines().map_while(Result::ok) {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let value: Value = match serde_json::from_str(trimmed) {
+            Ok(v) => v,
+            Err(_) => continue,
+        };
+
+        let kind = value.get("type").and_then(Value::as_str).unwrap_or("");
+
+        if kind == "session_meta" {
+            if inferred_session_id.is_none() {
+                inferred_session_id = value
+                    .pointer("/payload/id")
+                    .or_else(|| value.pointer("/payload/session_id"))
+                    .and_then(Value::as_str)
+                    .map(|s| s.to_string());
+            }
+        } else if kind == "response_item" {
+            let payload = match value.get("payload") {
+                Some(p) => p,
+                None => continue,
+            };
+            let payload_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
+            if payload_type == "message" {
+                let role = payload.get("role").and_then(Value::as_str).unwrap_or("");
+                if role == "user" {
+                    if let Some(text) = extract_codex_text(payload)
+                        && let Some(first) = first_line(&text)
+                    {
+                        let cleaned = clean_prompt_line(&first);
+                        if !cleaned.is_empty() {
+                            latest_prompt = Some(sanitize_file_urls(&cleaned));
+                        }
+                    }
+                } else if role == "assistant"
+                    && let Some(text) = extract_codex_text(payload)
+                {
+                    let trimmed = text.trim();
+                    if !trimmed.is_empty() {
+                        last_message = Some(sanitize_file_urls(trimmed));
+                    }
+                }
+            }
+        } else if kind == "event_msg" {
+            let payload = match value.get("payload") {
+                Some(p) => p,
+                None => continue,
+            };
+            let payload_type = payload.get("type").and_then(Value::as_str).unwrap_or("");
+            if payload_type == "task_complete" {
+                if let Some(msg) = payload.get("last_agent_message").and_then(Value::as_str) {
+                    let trimmed = msg.trim();
+                    if !trimmed.is_empty() {
+                        last_message = Some(sanitize_file_urls(trimmed));
+                    }
+                }
+            } else if payload_type == "item_completed"
+                && let Some(item) = payload.get("item")
+                && item.get("type").and_then(Value::as_str) == Some("AgentMessage")
+                && let Some(text) = extract_codex_text(item)
+            {
+                let trimmed = text.trim();
+                if !trimmed.is_empty() {
+                    last_message = Some(sanitize_file_urls(trimmed));
+                }
+            }
+        }
+    }
+
+    let final_session_id = if session_id.is_empty() || session_id == "codex" {
+        inferred_session_id.as_deref().unwrap_or(session_id)
+    } else {
+        session_id
+    };
+
+    let body = last_message.ok_or_else(|| {
+        format!("Codex session `{final_session_id}` has no assistant response text to copy")
+    })?;
+
+    let (subject, subject_source) = if let Some(title) = thread_name
+        .map(str::trim)
+        .filter(|t| !t.is_empty() && !is_placeholder_title(t))
+    {
+        (sanitize_file_urls(title), SubjectSource::Title)
+    } else if let Some(prompt) = latest_prompt {
+        (
+            truncate(&prompt, FALLBACK_SUBJECT_MAX),
+            SubjectSource::LatestPrompt,
+        )
+    } else {
+        let line = first_line(&body).unwrap_or_else(|| body.clone());
+        (
+            truncate(&line, FALLBACK_SUBJECT_MAX),
+            SubjectSource::LastMessage,
+        )
+    };
+
+    Ok(ChatMessage {
+        session_id: final_session_id.to_string(),
+        subject: sanitize_file_urls(&subject),
+        body: sanitize_file_urls(&body),
+        subject_source,
+    })
+}
+
+/// Parse a Codex session transcript from a byte slice.
+pub fn parse_codex(
+    transcript: &[u8],
+    session_id: &str,
+    thread_name: Option<&str>,
+) -> Result<ChatMessage, String> {
+    parse_codex_reader(std::io::Cursor::new(transcript), session_id, thread_name)
+}
+
+/// Load and parse a Codex transcript from disk.
+pub fn load_codex(path: &Path, session_id: &str) -> Result<ChatMessage, String> {
+    let codex_dir = codex_home_dir();
+    let thread_name = codex_dir
+        .as_deref()
+        .and_then(|dir| load_codex_thread_name(dir, session_id))
+        .or_else(|| {
+            let (real_id, _) = peek_codex_meta(path)?;
+            let id = real_id?;
+            codex_dir
+                .as_deref()
+                .and_then(|dir| load_codex_thread_name(dir, &id))
+        });
+
+    let stream = open_codex_file(path)?;
+    parse_codex_reader(stream, session_id, thread_name.as_deref())
+}
+
 /// Load and parse a session export or conversation log.
 ///
 /// Sources supported:
+/// - Explicit Codex session via `force_codex` or `session`.
+/// - Explicit Claude Code session via `force_claude` or `session`.
 /// - Explicit Antigravity conversation or OpenCode session via `session`.
 /// - `OPENCODE_SESSION_ID` environment variable.
+/// - `CLAUDE_SESSION_ID` environment variable.
 /// - `ANTIGRAVITY_CONVERSATION_ID` environment variable.
-/// - Auto-detection of the latest Antigravity conversation log in `~/.gemini/antigravity-ide/brain`.
+/// - `CODEX_SESSION_ID` environment variable.
+/// - Auto-detection of the latest conversation log across Antigravity, Claude Code, and Codex.
 pub fn load(
     session: Option<&str>,
     repo_root: Option<&Path>,
     force_antigravity: bool,
+    force_claude: bool,
+    force_codex: bool,
     verbose: bool,
 ) -> Result<ChatMessage, String> {
     let trimmed_session = session.map(str::trim).filter(|value| !value.is_empty());
+
+    if force_codex {
+        let (id, path) = if let Some(sess) = trimmed_session {
+            resolve_codex_session(sess)
+                .ok_or_else(|| format!("could not find Codex session or transcript `{sess}`"))?
+        } else if let Some((id, path)) = std::env::var(CODEX_SESSION_ENV).ok().and_then(|sess| {
+            let s = sess.trim();
+            if s.is_empty() {
+                None
+            } else {
+                resolve_codex_session(s)
+            }
+        }) {
+            (id, path)
+        } else {
+            find_latest_codex_log(repo_root)
+                .ok_or_else(|| "no Codex session log found".to_string())?
+        };
+
+        if verbose {
+            eprintln!("[mm] chat: using Codex log {} ({})", id, path.display());
+        }
+
+        return load_codex(&path, &id);
+    }
+
+    if force_claude {
+        let (id, path) = if let Some(sess) = trimmed_session {
+            resolve_claude_session(sess).ok_or_else(|| {
+                format!("could not find Claude Code session or transcript `{sess}`")
+            })?
+        } else if let Some((id, path)) = std::env::var(CLAUDE_SESSION_ENV).ok().and_then(|sess| {
+            let s = sess.trim();
+            if s.is_empty() {
+                None
+            } else {
+                resolve_claude_session(s)
+            }
+        }) {
+            (id, path)
+        } else {
+            find_latest_claude_log(repo_root)
+                .ok_or_else(|| "no Claude Code session log found".to_string())?
+        };
+
+        if verbose {
+            eprintln!(
+                "[mm] chat: using Claude Code log {} ({})",
+                id,
+                path.display()
+            );
+        }
+
+        return load_claude(&path, &id);
+    }
 
     if force_antigravity {
         let (id, path) = if let Some(sess) = trimmed_session {
@@ -390,6 +1424,17 @@ pub fn load(
     }
 
     if let Some(sess) = trimmed_session {
+        if let Some((id, path)) = resolve_claude_session(sess) {
+            if verbose {
+                eprintln!(
+                    "[mm] chat: using Claude Code log {} ({})",
+                    id,
+                    path.display()
+                );
+            }
+            return load_claude(&path, &id);
+        }
+
         if let Some((id, path)) = resolve_antigravity_session(sess) {
             if verbose {
                 eprintln!(
@@ -399,6 +1444,13 @@ pub fn load(
                 );
             }
             return load_antigravity(&path, &id);
+        }
+
+        if let Some((id, path)) = resolve_codex_session(sess) {
+            if verbose {
+                eprintln!("[mm] chat: using Codex log {} ({})", id, path.display());
+            }
+            return load_codex(&path, &id);
         }
 
         if verbose {
@@ -424,6 +1476,22 @@ pub fn load(
         ));
     }
 
+    if let Ok(claude_session) = std::env::var(CLAUDE_SESSION_ENV) {
+        let sess = claude_session.trim();
+        if !sess.is_empty()
+            && let Some((id, path)) = resolve_claude_session(sess)
+        {
+            if verbose {
+                eprintln!(
+                    "[mm] chat: using Claude Code log {} ({})",
+                    id,
+                    path.display()
+                );
+            }
+            return load_claude(&path, &id);
+        }
+    }
+
     if let Ok(agy_session) =
         std::env::var(ANTIGRAVITY_SESSION_ENV).or_else(|_| std::env::var("GEMINI_CONVERSATION_ID"))
     {
@@ -445,19 +1513,60 @@ pub fn load(
         }
     }
 
+    if let Ok(codex_session) = std::env::var(CODEX_SESSION_ENV) {
+        let sess = codex_session.trim();
+        if !sess.is_empty()
+            && let Some((id, path)) = resolve_codex_session(sess)
+        {
+            if verbose {
+                eprintln!("[mm] chat: using Codex log {} ({})", id, path.display());
+            }
+            return load_codex(&path, &id);
+        }
+    }
+
+    // Auto-detect between Antigravity, Claude Code, and Codex logs by latest modified time
+    let mut local_candidates: Vec<(SystemTime, String, PathBuf, &'static str)> = Vec::new();
+
     if let Some((id, path)) = find_latest_antigravity_log(repo_root) {
+        let mtime = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+        local_candidates.push((mtime, id, path, "Antigravity"));
+    }
+    if let Some((id, path)) = find_latest_claude_log(repo_root) {
+        let mtime = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+        local_candidates.push((mtime, id, path, "Claude Code"));
+    }
+    if let Some((id, path)) = find_latest_codex_log(repo_root) {
+        let mtime = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+        local_candidates.push((mtime, id, path, "Codex"));
+    }
+
+    local_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+
+    if let Some((_, id, path, tool)) = local_candidates.into_iter().next() {
         if verbose {
             eprintln!(
-                "[mm] chat: auto-detected Antigravity log {} ({})",
+                "[mm] chat: auto-detected {tool} log {} ({})",
                 id,
                 path.display()
             );
         }
-        return load_antigravity(&path, &id);
+        return match tool {
+            "Antigravity" => load_antigravity(&path, &id),
+            "Claude Code" => load_claude(&path, &id),
+            "Codex" => load_codex(&path, &id),
+            _ => unreachable!(),
+        };
     }
 
     Err(format!(
-        "no OpenCode session or Antigravity log found; set {SESSION_ENV}, {ANTIGRAVITY_SESSION_ENV}, or pass --chat-session <ID>"
+        "no OpenCode session, Antigravity log, Claude Code session, or Codex session found; set {SESSION_ENV}, {ANTIGRAVITY_SESSION_ENV}, {CLAUDE_SESSION_ENV}, {CODEX_SESSION_ENV}, or pass --chat-session <ID>"
     ))
 }
 
@@ -545,7 +1654,8 @@ pub fn parse(export: &[u8], session_id: &str) -> Result<ChatMessage, String> {
         .or_else(|| value.get("title"))
         .and_then(Value::as_str)
         .map(single_line)
-        .filter(|title| !title.is_empty() && !is_placeholder_title(title));
+        .filter(|title| !title.is_empty() && !is_placeholder_title(title))
+        .map(|t| sanitize_file_urls(&t));
 
     let mut latest_prompt = None;
     let mut last_message = None;
@@ -556,17 +1666,17 @@ pub fn parse(export: &[u8], session_id: &str) -> Result<ChatMessage, String> {
         match kind {
             "user" => {
                 if let Some(line) = user_text(message).as_deref().and_then(first_line) {
-                    latest_prompt = Some(line);
+                    latest_prompt = Some(sanitize_file_urls(&line));
                 }
             }
             "assistant" => {
                 if let Some(text) = assistant_copy_text(message) {
-                    last_message = Some(text);
+                    last_message = Some(sanitize_file_urls(&text));
                 }
             }
             "compaction" => {
                 if let Some(text) = compaction_text(message) {
-                    last_message = Some(text);
+                    last_message = Some(sanitize_file_urls(&text));
                 }
             }
             _ => {}
@@ -599,8 +1709,8 @@ pub fn parse(export: &[u8], session_id: &str) -> Result<ChatMessage, String> {
 
     Ok(ChatMessage {
         session_id: session_id.to_string(),
-        subject,
-        body,
+        subject: sanitize_file_urls(&subject),
+        body: sanitize_file_urls(&body),
         subject_source,
     })
 }
@@ -986,5 +2096,252 @@ mod tests {
         let error = parse_antigravity(transcript.as_bytes(), "conv_empty").unwrap_err();
         assert!(error.contains("no assistant response text"));
         assert!(error.contains("conv_empty"));
+    }
+
+    #[test]
+    fn sanitize_file_urls_replaces_macos_user_paths() {
+        assert_eq!(sanitize_file_urls("file:///Users/user/..."), "~/...");
+        assert_eq!(
+            sanitize_file_urls("Check file:///Users/a0/project/file.rs"),
+            "Check ~/project/file.rs"
+        );
+        assert_eq!(
+            sanitize_file_urls("[Cargo.toml](file:///Users/john.doe/w/repo/Cargo.toml)"),
+            "[Cargo.toml](~/w/repo/Cargo.toml)"
+        );
+        assert_eq!(
+            sanitize_file_urls("directory file:///Users/alice/"),
+            "directory ~/"
+        );
+        assert_eq!(sanitize_file_urls("look in file:///Users/bob"), "look in ~");
+        assert_eq!(
+            sanitize_file_urls("link at (file:///Users/carol/foo.rs#L10-L20)"),
+            "link at (~/foo.rs#L10-L20)"
+        );
+    }
+
+    #[test]
+    fn sanitize_file_urls_replaces_linux_and_windows_paths() {
+        assert_eq!(
+            sanitize_file_urls("file:///home/user/code/main.rs"),
+            "~/code/main.rs"
+        );
+        assert_eq!(
+            sanitize_file_urls("file:///C:/Users/user/project/file.rs"),
+            "~/project/file.rs"
+        );
+        assert_eq!(
+            sanitize_file_urls("file://localhost/Users/user/project/file.rs"),
+            "~/project/file.rs"
+        );
+    }
+
+    #[test]
+    fn sanitize_file_urls_replaces_multiple_occurrences() {
+        let input =
+            "Modified [a](file:///Users/alice/repo/a.rs) and [b](file:///Users/bob/repo/b.rs)";
+        assert_eq!(
+            sanitize_file_urls(input),
+            "Modified [a](~/repo/a.rs) and [b](~/repo/b.rs)"
+        );
+    }
+
+    #[test]
+    fn sanitize_file_urls_leaves_non_user_urls_intact() {
+        assert_eq!(sanitize_file_urls("file:///etc/hosts"), "file:///etc/hosts");
+        assert_eq!(
+            sanitize_file_urls("file:///Users//empty"),
+            "file:///Users//empty"
+        );
+        assert_eq!(
+            sanitize_file_urls("https://example.com/Users/user"),
+            "https://example.com/Users/user"
+        );
+    }
+
+    #[test]
+    fn antigravity_transcript_sanitizes_file_urls() {
+        let transcript = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nfix file:///Users/secret_user/project/lib.rs\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Fixed bug in [lib.rs](file:///Users/secret_user/project/lib.rs)."}
+"#;
+
+        let message = parse_antigravity(transcript.as_bytes(), "conv_leak").unwrap();
+        assert_eq!(message.subject, "fix ~/project/lib.rs");
+        assert_eq!(message.body, "Fixed bug in [lib.rs](~/project/lib.rs).");
+        assert!(!message.message(None).contains("secret_user"));
+    }
+
+    #[test]
+    fn opencode_export_sanitizes_file_urls() {
+        let export = r#"{
+            "info": { "title": "Inspect file:///Users/opencode_user/repo/README.md" },
+            "messages": [
+                {
+                    "type": "assistant",
+                    "content": [{ "type": "text", "text": "See [doc](file:///Users/opencode_user/repo/README.md)." }]
+                }
+            ]
+        }"#;
+
+        let message = parse(export.as_bytes(), "ses_leak").unwrap();
+        assert_eq!(message.subject, "Inspect ~/repo/README.md");
+        assert_eq!(message.body, "See [doc](~/repo/README.md).");
+        assert!(!message.message(None).contains("opencode_user"));
+    }
+
+    #[test]
+    fn parses_claude_transcript() {
+        let transcript = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Implement Claude Code support\nMore details"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"thinking","thinking":"planning"},{"type":"text","text":"Implemented Claude Code support."}]}}
+"#;
+
+        let message = parse_claude(transcript.as_bytes(), "sess_claude_1").unwrap();
+        assert_eq!(message.session_id, "sess_claude_1");
+        assert_eq!(message.subject, "Implement Claude Code support");
+        assert_eq!(message.subject_source, SubjectSource::LatestPrompt);
+        assert_eq!(message.body, "Implemented Claude Code support.");
+        assert_eq!(
+            message.message(None),
+            "Implement Claude Code support\n\nImplemented Claude Code support."
+        );
+    }
+
+    #[test]
+    fn claude_ignores_tool_results_for_prompt() {
+        let transcript = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"original user prompt"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","name":"bash","input":{"command":"cargo test"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"test output"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"All tests passed."}]}}
+"#;
+
+        let message = parse_claude(transcript.as_bytes(), "sess_claude_2").unwrap();
+        assert_eq!(message.subject, "original user prompt");
+        assert_eq!(message.body, "All tests passed.");
+    }
+
+    #[test]
+    fn claude_falls_back_to_assistant_first_line() {
+        let transcript = r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"First line of claude answer\nSecond line"}]}}
+"#;
+
+        let message = parse_claude(transcript.as_bytes(), "sess_claude_3").unwrap();
+        assert_eq!(message.subject, "First line of claude answer");
+        assert_eq!(message.subject_source, SubjectSource::LastMessage);
+        assert_eq!(message.body, "First line of claude answer\nSecond line");
+    }
+
+    #[test]
+    fn claude_sanitizes_file_urls() {
+        let transcript = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"Check file:///Users/myuser/project/main.rs"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Modified file:///Users/myuser/project/main.rs."}]}}
+"#;
+
+        let message = parse_claude(transcript.as_bytes(), "sess_claude_4").unwrap();
+        assert_eq!(message.subject, "Check ~/project/main.rs");
+        assert_eq!(message.body, "Modified ~/project/main.rs.");
+        assert!(!message.message(None).contains("myuser"));
+    }
+
+    #[test]
+    fn claude_rejects_empty_assistant() {
+        let transcript = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"only prompt"}]}}
+"#;
+
+        let err = parse_claude(transcript.as_bytes(), "sess_claude_5").unwrap_err();
+        assert!(err.contains("no assistant response text"));
+        assert!(err.contains("sess_claude_5"));
+    }
+
+    #[test]
+    fn encodes_claude_project_path() {
+        assert_eq!(
+            encode_claude_project_path(Path::new("/Users/a0/w/auto-commit/rust")),
+            "-Users-a0-w-auto-commit-rust"
+        );
+        assert_eq!(
+            encode_claude_project_path(Path::new("C:\\Users\\user\\project")),
+            "C--Users-user-project"
+        );
+    }
+
+    #[test]
+    fn parses_codex_transcript() {
+        let transcript = r#"{"type":"session_meta","payload":{"id":"01a10459-bbd6-7f61-97ea-12a1ac1a7e91","cwd":"/Users/user/project"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Implement Codex log support\nMore details"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Implemented Codex log support."}]}}
+"#;
+
+        let message = parse_codex(transcript.as_bytes(), "codex_1", None).unwrap();
+        assert_eq!(message.session_id, "codex_1");
+        assert_eq!(message.subject, "Implement Codex log support");
+        assert_eq!(message.subject_source, SubjectSource::LatestPrompt);
+        assert_eq!(message.body, "Implemented Codex log support.");
+        assert_eq!(
+            message.message(None),
+            "Implement Codex log support\n\nImplemented Codex log support."
+        );
+    }
+
+    #[test]
+    fn parses_codex_with_thread_name_title() {
+        let transcript = r#"{"type":"session_meta","payload":{"id":"01a10459-bbd6-7f61-97ea-12a1ac1a7e91","cwd":"/Users/user/project"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"User request line\nDetails"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done."}]}}
+"#;
+
+        let message = parse_codex(
+            transcript.as_bytes(),
+            "01a10459-bbd6-7f61-97ea-12a1ac1a7e91",
+            Some("Create repository contributor guide"),
+        )
+        .unwrap();
+        assert_eq!(message.subject, "Create repository contributor guide");
+        assert_eq!(message.subject_source, SubjectSource::Title);
+        assert_eq!(message.body, "Done.");
+    }
+
+    #[test]
+    fn parses_codex_with_task_complete() {
+        let transcript = r#"{"type":"session_meta","payload":{"id":"01a10459-bbd6-7f61-97ea-12a1ac1a7e91","cwd":"/Users/user/project"}}
+{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Do some task"}]}}
+{"type":"event_msg","payload":{"type":"task_complete","last_agent_message":"Completed the task successfully."}}
+"#;
+
+        let message = parse_codex(transcript.as_bytes(), "codex_tc", None).unwrap();
+        assert_eq!(message.subject, "Do some task");
+        assert_eq!(message.body, "Completed the task successfully.");
+    }
+
+    #[test]
+    fn codex_falls_back_to_assistant_first_line() {
+        let transcript = r#"{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"First line of codex answer\nSecond line"}]}}
+"#;
+
+        let message = parse_codex(transcript.as_bytes(), "codex_fallback", None).unwrap();
+        assert_eq!(message.subject, "First line of codex answer");
+        assert_eq!(message.subject_source, SubjectSource::LastMessage);
+        assert_eq!(message.body, "First line of codex answer\nSecond line");
+    }
+
+    #[test]
+    fn codex_sanitizes_file_urls() {
+        let transcript = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Check file:///Users/myuser/project/main.rs"}]}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Modified file:///Users/myuser/project/main.rs."}]}}
+"#;
+
+        let message = parse_codex(transcript.as_bytes(), "codex_leak", None).unwrap();
+        assert_eq!(message.subject, "Check ~/project/main.rs");
+        assert_eq!(message.body, "Modified ~/project/main.rs.");
+        assert!(!message.message(None).contains("myuser"));
+    }
+
+    #[test]
+    fn codex_rejects_empty_assistant() {
+        let transcript = r#"{"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"only prompt"}]}}
+"#;
+
+        let err = parse_codex(transcript.as_bytes(), "codex_empty", None).unwrap_err();
+        assert!(err.contains("no assistant response text"));
+        assert!(err.contains("codex_empty"));
     }
 }

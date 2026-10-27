@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 2026-10-27
+
+### Changes
+
+- Added support for copying commit messages from OpenAI Codex session transcripts (`--codex` and `--codex-session`).
+- Added support for copying commit messages from Claude Code session transcripts (`--claude` and `--claude-session`).
+- Replaced absolute user file paths (`file:///Users/user/...`) with `~/...` when copying commit messages from AI Agent logs to prevent leaking local user names.
+
 ## 2026-10-25
 
 ### Changes

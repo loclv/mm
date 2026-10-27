@@ -41,7 +41,7 @@ automatically falls back to the path-based pipeline.
 - `conventional.rs` picks types from paths, checking specific categories before
   general ones. `message.rs` owns wording, `policy.rs` translates commitlint
   rules, and `commitlint.rs` handles discovery/loading.
-- `chat.rs` loads chat context from OpenCode or Antigravity.
+- `chat.rs` loads chat context from OpenCode, Antigravity, Claude Code, or Codex.
   - OpenCode: shells out to `opencode session export <id>` and parses its JSON.
     `--chat` uses the session title as the subject and copies the last assistant
     message as the body, matching OpenCode's `/copy`; a completed compaction
@@ -56,8 +56,24 @@ automatically falls back to the path-based pipeline.
     request (from `<USER_REQUEST>`, stripped of `@` file mentions), falling back to
     the first line of the assistant message. The body is the text content from the
     last assistant message (`PLANNER_RESPONSE`).
+  - Claude Code: parses JSON Lines transcripts from
+    `~/.claude/projects/<encoded-project-path>/<session-id>.jsonl` (or `CLAUDE_CONFIG_DIR`).
+    `--claude` forces Claude Code mode; `--claude-session` selects a specific session
+    ID or file path. Auto-detection matches the repository working directory.
+    The subject is the first line of the latest user prompt (ignoring tool results),
+    falling back to the first line of the assistant message. The body is the text content
+    from the last assistant message.
+  - Codex: parses JSON Lines transcripts from
+    `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.zst` (or `.jsonl`, configured via `CODEX_HOME`).
+    `--codex` forces Codex mode; `--codex-session` selects a specific session ID or file path.
+    Auto-detection matches the repository working directory (via `session_meta.payload.cwd`).
+    The subject uses `thread_name` from `session_index.jsonl` if available, falling back
+    to the first line of the latest user prompt, falling back to the assistant message.
+    The body is the text content from the last assistant message or task completion.
   - `--message` overrides the copied subject. A session with no copyable text is
     an error.
+  - User file URIs (`file:///Users/user/...` or `file:///home/user/...`) are
+    replaced with `~/...` when copying from logs to prevent leaking local user names.
 - `Policy` intentionally supports only rules that shape the single-line header
   (type/scope/length/full stop). Bodies, footers and trailers are never
   generated except in `--chat` mode, which copies the last assistant message and

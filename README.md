@@ -10,9 +10,9 @@ mm
 By default there is no AI or network call. The message is built from the paths
 and change types that Git reports.
 If the project has a commitlint configuration, its type,
-scope and length rules are applied too. Inside OpenCode or Antigravity, `--chat` or `--agy`
+scope and length rules are applied too. Inside OpenCode, Antigravity, Claude Code, or Codex, `--chat`, `--agy`, `--claude`, or `--codex`
 can copy the session/prompt and last assistant message instead; see
-[Using an OpenCode or Antigravity chat](#using-an-opencode-or-antigravity-chat).
+[Using an OpenCode, Antigravity, Claude Code, or Codex chat](#using-an-opencode-antigravity-claude-code-or-codex-chat).
 
 ## Install
 
@@ -37,8 +37,10 @@ mm --print # Show the message without committing
 mm --add # Stage everything (including new files), then commit
 mm --edit # Open the editor before committing
 mm --staged # Use only staged changes
-mm --chat # Copy the current OpenCode or Antigravity chat
+mm --chat # Copy the current OpenCode, Antigravity, Claude Code, or Codex chat
 mm --agy # Copy the latest Antigravity log commit message
+mm --claude # Copy the latest Claude Code log commit message
+mm --codex # Copy the latest Codex log commit message
 mm -m 'JIRA-1: fix' # Keep an existing prefix/description (or override a chat subject)
 ```
 
@@ -64,21 +66,26 @@ for from the current directory upwards, stopping at your home directory):
 Messages then use plain descriptions such as `update README.md`. An explicit
 `--message` prefix is still preserved, and commitlint rules still apply.
 
-### Using an OpenCode or Antigravity chat
+### Using an OpenCode, Antigravity, Claude Code, or Codex chat
 
-`mm` can extract the commit message from OpenCode or Antigravity chats:
+`mm` can extract the commit message from OpenCode, Antigravity, Claude Code, or Codex chats:
 
 ```sh
-mm --chat --print # preview the message (auto-detects OpenCode or Antigravity)
-mm --agy --print  # preview message from the latest Antigravity log
-mm --agy          # commit using the latest Antigravity log
+mm --chat --print   # preview the message (auto-detects OpenCode, Antigravity, Claude Code, or Codex)
+mm --agy --print    # preview message from the latest Antigravity log
+mm --claude --print # preview message from the latest Claude Code log
+mm --codex --print  # preview message from the latest Codex log
+mm --codex          # commit using the latest Codex log
 ```
 
 - **OpenCode**: `OPENCODE_SESSION_ID` selects the session. The subject is the session title (or latest user prompt line), and the body is the last assistant message (or compaction summary).
 - **Antigravity**: Transcript logs from `~/.gemini/antigravity-ide/brain` (or `ANTIGRAVITY_CONVERSATION_ID`) are read. The subject is the latest user request line, and the body is the last assistant response.
-- `--agy-session <ID>` or `--chat-session <ID>` selects a specific session or transcript path.
+- **Claude Code**: Transcript logs from `~/.claude/projects/` (or `CLAUDE_SESSION_ID`) are read. The subject is the latest user prompt line, and the body is the last assistant text response.
+- **Codex**: Transcript logs from `~/.codex/sessions/` (or `CODEX_SESSION_ID`) are read. The subject is the thread title from `session_index.jsonl` (or latest user prompt line), and the body is the last assistant response.
+- `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path.
 - `--message` overrides the subject; the copied message remains the body.
-- `--chat` and `--agy` skip path-based generation and commitlint message shaping.
+- User file URIs like `file:///Users/user/...` are sanitized to `~/...` to prevent leaking local user names.
+- `--chat`, `--agy`, `--claude`, and `--codex` skip path-based generation and commitlint message shaping.
 - If copying the log from the AI Agent fails, `mm` automatically falls back to generating the commit message from Git changes.
 
 ### How changes are selected
