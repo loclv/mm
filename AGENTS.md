@@ -74,6 +74,8 @@ automatically falls back to the path-based pipeline.
     an error.
   - User file URIs (`file:///Users/user/...` or `file:///home/user/...`) are
     replaced with `~/...` when copying from logs to prevent leaking local user names.
+    References to the current repository directory (e.g. `~/w/auto-commit/rust/` or
+    `file:///Users/user/.../rust/`) are replaced with `./`.
 - `Policy` intentionally supports only rules that shape the single-line header
   (type/scope/length/full stop). Bodies, footers and trailers are never
   generated except in `--chat` mode, which copies the last assistant message and

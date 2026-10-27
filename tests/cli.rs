@@ -928,6 +928,46 @@ fn copies_antigravity_log_sanitizing_user_file_urls() {
 }
 
 #[test]
+fn copies_chat_log_replacing_current_repo_path_with_relative() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-repopath-{}", std::process::id()));
+    let conv_dir = brain.join("conv-repopath");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let repo_path = repo.path().display().to_string();
+    let repo_name = repo.path().file_name().unwrap().to_string_lossy();
+    let parent_home = repo.path().parent().unwrap().to_string_lossy().to_string();
+
+    let transcript = format!(
+        r#"{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nfix file://{repo_path}/foo.txt\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: {repo_path}/foo.txt\n</ADDITIONAL_METADATA>"}}
+{{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Updated [foo.txt](file://{repo_path}/foo.txt).\n\nSee {repo_path}/ and [tilde](~/{repo_name}/foo.txt) for details."}}
+"#
+    );
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--agy", "--print"],
+        &[
+            ("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy()),
+            ("HOME", &parent_home),
+        ],
+        &["ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "fix ./foo.txt\n\nUpdated [foo.txt](./foo.txt).\n\nSee ./ and [tilde](./foo.txt) for details."
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
 fn copies_claude_last_log_with_claude_flag() {
     let repo = Repo::new();
     repo.write("foo.txt", "new\n");

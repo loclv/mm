@@ -84,7 +84,7 @@ mm --codex          # commit using the latest Codex log
 - **Codex**: Transcript logs from `~/.codex/sessions/` (or `CODEX_SESSION_ID`) are read. The subject is the thread title from `session_index.jsonl` (or latest user prompt line), and the body is the last assistant response.
 - `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path.
 - `--message` overrides the subject; the copied message remains the body.
-- User file URIs like `file:///Users/user/...` are sanitized to `~/...` to prevent leaking local user names.
+- User file URIs like `file:///Users/user/...` are sanitized to `~/...` to prevent leaking local user names, and references to the current repository directory are sanitized to `./`.
 - `--chat`, `--agy`, `--claude`, and `--codex` skip path-based generation and commitlint message shaping.
 - If copying the log from the AI Agent fails, `mm` automatically falls back to generating the commit message from Git changes.
 

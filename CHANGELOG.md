@@ -6,6 +6,7 @@
 
 - Added support for copying commit messages from OpenAI Codex session transcripts (`--codex` and `--codex-session`).
 - Added support for copying commit messages from Claude Code session transcripts (`--claude` and `--claude-session`).
+- Replaced references to the current repository path (such as `~/w/auto-commit/rust/`) with `./` in commit messages copied from AI Agent logs.
 - Replaced absolute user file paths (`file:///Users/user/...`) with `~/...` when copying commit messages from AI Agent logs to prevent leaking local user names.
 
 ## 2026-10-25

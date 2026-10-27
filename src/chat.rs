@@ -77,11 +77,13 @@ impl ChatMessage {
             .filter(|value| !value.is_empty())
             .unwrap_or(&self.subject);
 
-        if self.body.is_empty() {
-            return subject.to_string();
-        }
+        let msg = if self.body.is_empty() {
+            subject.to_string()
+        } else {
+            format!("{subject}\n\n{}", self.body)
+        };
 
-        format!("{subject}\n\n{}", self.body)
+        sanitize_current_path(&msg, None)
     }
 }
 
@@ -221,6 +223,123 @@ pub fn sanitize_file_urls(text: &str) -> String {
 
     result.push_str(&text[cursor..]);
     result
+}
+
+/// Replace occurrences of `target/` with `replacement`, and occurrences of `target`
+/// followed by a path delimiter or end-of-string with `replacement`.
+fn replace_path_target(mut text: String, target: &str, replacement: &str) -> String {
+    let with_slash = format!("{target}/");
+    text = text.replace(&with_slash, replacement);
+
+    let target_len = target.len();
+    let mut start = 0;
+    while let Some(pos) = text[start..].find(target) {
+        let abs_pos = start + pos;
+        let after = abs_pos + target_len;
+        let is_boundary = if after == text.len() {
+            true
+        } else {
+            let next_char = text[after..].chars().next().unwrap();
+            is_path_delimiter(next_char)
+        };
+
+        if is_boundary {
+            text.replace_range(abs_pos..after, replacement);
+            start = abs_pos + replacement.len();
+        } else {
+            start = after;
+        }
+    }
+    text
+}
+
+/// Replace occurrences of the current path (e.g. `~/w/auto-commit/rust/`,
+/// `file:///Users/user/repo/`, or `/Users/user/repo/`) with `./` in commit messages.
+pub fn sanitize_current_path_with_home(
+    text: &str,
+    current_dir: Option<&Path>,
+    home_dir: Option<&Path>,
+) -> String {
+    let dir = match current_dir {
+        Some(d) => d.to_path_buf(),
+        None => match std::env::current_dir() {
+            Ok(d) => d,
+            Err(_) => return text.to_string(),
+        },
+    };
+
+    let mut dirs = vec![dir.clone()];
+    if let Ok(canonical) = fs::canonicalize(&dir)
+        && !dirs.contains(&canonical)
+    {
+        dirs.push(canonical);
+    }
+    let dir_str = dir.to_string_lossy();
+    if let Some(stripped) = dir_str.strip_prefix("/private/") {
+        let alt = PathBuf::from(format!("/{stripped}"));
+        if !dirs.contains(&alt) {
+            dirs.push(alt);
+        }
+    }
+
+    let mut home_paths = Vec::new();
+    if let Some(h) = home_dir {
+        home_paths.push(h.to_path_buf());
+        if let Ok(canonical) = fs::canonicalize(h)
+            && !home_paths.contains(&canonical)
+        {
+            home_paths.push(canonical);
+        }
+        let h_str = h.to_string_lossy();
+        if let Some(stripped) = h_str.strip_prefix("/private/") {
+            let alt = PathBuf::from(format!("/{stripped}"));
+            if !home_paths.contains(&alt) {
+                home_paths.push(alt);
+            }
+        }
+    }
+
+    let mut result = text.to_string();
+
+    for d in &dirs {
+        let abs_str = d.to_string_lossy().replace('\\', "/");
+        let abs_trimmed = abs_str.trim_end_matches('/');
+        if abs_trimmed.is_empty() || abs_trimmed == "/" {
+            continue;
+        }
+
+        // 1. file://localhost<abs>
+        let file_localhost = format!("file://localhost{abs_trimmed}");
+        result = replace_path_target(result, &file_localhost, "./");
+
+        // 2. file://<abs>
+        let file_direct = format!("file://{abs_trimmed}");
+        result = replace_path_target(result, &file_direct, "./");
+
+        // 3. ~/<rel> if inside HOME
+        for home_path in &home_paths {
+            if let Ok(rel) = d.strip_prefix(home_path) {
+                let rel_str = rel.to_string_lossy().replace('\\', "/");
+                let rel_trimmed = rel_str.trim_matches('/');
+                if !rel_trimmed.is_empty() {
+                    let home_rel = format!("~/{rel_trimmed}");
+                    result = replace_path_target(result, &home_rel, "./");
+                }
+            }
+        }
+
+        // 4. raw <abs>
+        result = replace_path_target(result, abs_trimmed, "./");
+    }
+
+    result
+}
+
+/// Replace current directory paths (e.g. `~/w/auto-commit/rust/`, `file:///Users/user/repo/`,
+/// or `/Users/user/repo/`) with `./` in commit messages using `$HOME`.
+pub fn sanitize_current_path(text: &str, current_dir: Option<&Path>) -> String {
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    sanitize_current_path_with_home(text, current_dir, home.as_deref())
 }
 
 /// Path to Antigravity's brain directory storing conversation transcripts.
@@ -1332,6 +1451,27 @@ pub fn load(
     force_codex: bool,
     verbose: bool,
 ) -> Result<ChatMessage, String> {
+    let mut chat = load_raw(
+        session,
+        repo_root,
+        force_antigravity,
+        force_claude,
+        force_codex,
+        verbose,
+    )?;
+    chat.subject = sanitize_current_path(&chat.subject, repo_root);
+    chat.body = sanitize_current_path(&chat.body, repo_root);
+    Ok(chat)
+}
+
+fn load_raw(
+    session: Option<&str>,
+    repo_root: Option<&Path>,
+    force_antigravity: bool,
+    force_claude: bool,
+    force_codex: bool,
+    verbose: bool,
+) -> Result<ChatMessage, String> {
     let trimmed_session = session.map(str::trim).filter(|value| !value.is_empty());
 
     if force_codex {
@@ -2343,5 +2483,93 @@ mod tests {
         let err = parse_codex(transcript.as_bytes(), "codex_empty", None).unwrap_err();
         assert!(err.contains("no assistant response text"));
         assert!(err.contains("codex_empty"));
+    }
+
+    #[test]
+    fn sanitize_current_path_replaces_repo_path_with_dot_slash() {
+        let home = Path::new("/Users/a0");
+        let repo = Path::new("/Users/a0/w/auto-commit/rust");
+
+        // Trailing slash in tilde form
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "Updated [chat.rs](~/w/auto-commit/rust/src/chat.rs)",
+                Some(repo),
+                Some(home)
+            ),
+            "Updated [chat.rs](./src/chat.rs)"
+        );
+
+        // Raw directory with trailing slash
+        assert_eq!(
+            sanitize_current_path_with_home("In ~/w/auto-commit/rust/", Some(repo), Some(home)),
+            "In ./"
+        );
+
+        // Delimiter boundary without trailing slash
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "In directory [rust](~/w/auto-commit/rust)",
+                Some(repo),
+                Some(home)
+            ),
+            "In directory [rust](./)"
+        );
+
+        // Absolute path with trailing slash
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "Inspect /Users/a0/w/auto-commit/rust/src/main.rs",
+                Some(repo),
+                Some(home)
+            ),
+            "Inspect ./src/main.rs"
+        );
+
+        // file:// URL
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "Look at file:///Users/a0/w/auto-commit/rust/src/chat.rs",
+                Some(repo),
+                Some(home)
+            ),
+            "Look at ./src/chat.rs"
+        );
+
+        // file://localhost URL
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "Look at file://localhost/Users/a0/w/auto-commit/rust/README.md",
+                Some(repo),
+                Some(home)
+            ),
+            "Look at ./README.md"
+        );
+    }
+
+    #[test]
+    fn sanitize_current_path_preserves_other_paths() {
+        let home = Path::new("/Users/a0");
+        let repo = Path::new("/Users/a0/w/auto-commit/rust");
+
+        // Other project in same home
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "See ~/other-project/src/main.rs",
+                Some(repo),
+                Some(home)
+            ),
+            "See ~/other-project/src/main.rs"
+        );
+
+        // Similar prefix directory (not delimited)
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "See ~/w/auto-commit/rust-extra/src/main.rs",
+                Some(repo),
+                Some(home)
+            ),
+            "See ~/w/auto-commit/rust-extra/src/main.rs"
+        );
     }
 }
