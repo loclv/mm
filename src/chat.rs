@@ -522,6 +522,7 @@ fn clean_prompt_line(text: &str) -> String {
 pub fn parse_antigravity_reader<R: BufRead>(
     reader: R,
     conversation_id: &str,
+    repo_root: Option<&Path>,
 ) -> Result<ChatMessage, String> {
     let mut latest_prompt: Option<String> = None;
     let mut last_message: Option<String> = None;
@@ -573,14 +574,18 @@ pub fn parse_antigravity_reader<R: BufRead>(
     })?;
 
     let (subject, subject_source) = match latest_prompt {
-        Some(prompt) => (
-            truncate(&prompt, FALLBACK_SUBJECT_MAX),
-            SubjectSource::LatestPrompt,
-        ),
+        Some(prompt) => {
+            let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
+            (
+                truncate(&sanitized, FALLBACK_SUBJECT_MAX),
+                SubjectSource::LatestPrompt,
+            )
+        }
         None => {
             let line = first_line(&body).unwrap_or_else(|| body.clone());
+            let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
             (
-                truncate(&line, FALLBACK_SUBJECT_MAX),
+                truncate(&sanitized, FALLBACK_SUBJECT_MAX),
                 SubjectSource::LastMessage,
             )
         }
@@ -596,11 +601,15 @@ pub fn parse_antigravity_reader<R: BufRead>(
 
 /// Parse an Antigravity transcript from a byte slice.
 pub fn parse_antigravity(transcript: &[u8], conversation_id: &str) -> Result<ChatMessage, String> {
-    parse_antigravity_reader(std::io::Cursor::new(transcript), conversation_id)
+    parse_antigravity_reader(std::io::Cursor::new(transcript), conversation_id, None)
 }
 
 /// Load and parse an Antigravity transcript from disk.
-pub fn load_antigravity(path: &Path, conversation_id: &str) -> Result<ChatMessage, String> {
+pub fn load_antigravity(
+    path: &Path,
+    conversation_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
     let file = fs::File::open(path).map_err(|error| {
         format!(
             "could not open Antigravity transcript {}: {error}",
@@ -608,7 +617,7 @@ pub fn load_antigravity(path: &Path, conversation_id: &str) -> Result<ChatMessag
         )
     })?;
     let reader = std::io::BufReader::new(file);
-    parse_antigravity_reader(reader, conversation_id)
+    parse_antigravity_reader(reader, conversation_id, repo_root)
 }
 
 /// Path to Claude Code's configuration directory.
@@ -853,7 +862,11 @@ fn extract_claude_text(value: &Value, is_user: bool) -> Option<String> {
 }
 
 /// Parse a Claude Code transcript from a reader.
-pub fn parse_claude_reader<R: BufRead>(reader: R, session_id: &str) -> Result<ChatMessage, String> {
+pub fn parse_claude_reader<R: BufRead>(
+    reader: R,
+    session_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
     let mut latest_prompt: Option<String> = None;
     let mut last_message: Option<String> = None;
 
@@ -899,14 +912,18 @@ pub fn parse_claude_reader<R: BufRead>(reader: R, session_id: &str) -> Result<Ch
     })?;
 
     let (subject, subject_source) = match latest_prompt {
-        Some(prompt) => (
-            truncate(&prompt, FALLBACK_SUBJECT_MAX),
-            SubjectSource::LatestPrompt,
-        ),
+        Some(prompt) => {
+            let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
+            (
+                truncate(&sanitized, FALLBACK_SUBJECT_MAX),
+                SubjectSource::LatestPrompt,
+            )
+        }
         None => {
             let line = first_line(&body).unwrap_or_else(|| body.clone());
+            let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
             (
-                truncate(&line, FALLBACK_SUBJECT_MAX),
+                truncate(&sanitized, FALLBACK_SUBJECT_MAX),
                 SubjectSource::LastMessage,
             )
         }
@@ -922,11 +939,15 @@ pub fn parse_claude_reader<R: BufRead>(reader: R, session_id: &str) -> Result<Ch
 
 /// Parse a Claude Code transcript from a byte slice.
 pub fn parse_claude(transcript: &[u8], session_id: &str) -> Result<ChatMessage, String> {
-    parse_claude_reader(std::io::Cursor::new(transcript), session_id)
+    parse_claude_reader(std::io::Cursor::new(transcript), session_id, None)
 }
 
 /// Load and parse a Claude Code transcript from disk.
-pub fn load_claude(path: &Path, session_id: &str) -> Result<ChatMessage, String> {
+pub fn load_claude(
+    path: &Path,
+    session_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
     let file = fs::File::open(path).map_err(|error| {
         format!(
             "could not open Claude Code transcript {}: {error}",
@@ -934,7 +955,7 @@ pub fn load_claude(path: &Path, session_id: &str) -> Result<ChatMessage, String>
         )
     })?;
     let reader = std::io::BufReader::new(file);
-    parse_claude_reader(reader, session_id)
+    parse_claude_reader(reader, session_id, repo_root)
 }
 
 /// Helper struct that holds an open reader and optional child process (for zstd).
@@ -1291,6 +1312,7 @@ pub fn parse_codex_reader<R: BufRead>(
     reader: R,
     session_id: &str,
     thread_name: Option<&str>,
+    repo_root: Option<&Path>,
 ) -> Result<ChatMessage, String> {
     let mut latest_prompt: Option<String> = None;
     let mut last_message: Option<String> = None;
@@ -1383,16 +1405,19 @@ pub fn parse_codex_reader<R: BufRead>(
         .map(str::trim)
         .filter(|t| !t.is_empty() && !is_placeholder_title(t))
     {
-        (sanitize_file_urls(title), SubjectSource::Title)
+        let sanitized = sanitize_current_path(&sanitize_file_urls(title), repo_root);
+        (sanitized, SubjectSource::Title)
     } else if let Some(prompt) = latest_prompt {
+        let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
         (
-            truncate(&prompt, FALLBACK_SUBJECT_MAX),
+            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
             SubjectSource::LatestPrompt,
         )
     } else {
         let line = first_line(&body).unwrap_or_else(|| body.clone());
+        let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
         (
-            truncate(&line, FALLBACK_SUBJECT_MAX),
+            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
             SubjectSource::LastMessage,
         )
     };
@@ -1411,11 +1436,20 @@ pub fn parse_codex(
     session_id: &str,
     thread_name: Option<&str>,
 ) -> Result<ChatMessage, String> {
-    parse_codex_reader(std::io::Cursor::new(transcript), session_id, thread_name)
+    parse_codex_reader(
+        std::io::Cursor::new(transcript),
+        session_id,
+        thread_name,
+        None,
+    )
 }
 
 /// Load and parse a Codex transcript from disk.
-pub fn load_codex(path: &Path, session_id: &str) -> Result<ChatMessage, String> {
+pub fn load_codex(
+    path: &Path,
+    session_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
     let codex_dir = codex_home_dir();
     let thread_name = codex_dir
         .as_deref()
@@ -1429,7 +1463,7 @@ pub fn load_codex(path: &Path, session_id: &str) -> Result<ChatMessage, String> 
         });
 
     let stream = open_codex_file(path)?;
-    parse_codex_reader(stream, session_id, thread_name.as_deref())
+    parse_codex_reader(stream, session_id, thread_name.as_deref(), repo_root)
 }
 
 /// Load and parse a session export or conversation log.
@@ -1496,7 +1530,7 @@ fn load_raw(
             eprintln!("[mm] chat: using Codex log {} ({})", id, path.display());
         }
 
-        return load_codex(&path, &id);
+        return load_codex(&path, &id, repo_root);
     }
 
     if force_claude {
@@ -1526,7 +1560,7 @@ fn load_raw(
             );
         }
 
-        return load_claude(&path, &id);
+        return load_claude(&path, &id, repo_root);
     }
 
     if force_antigravity {
@@ -1560,7 +1594,7 @@ fn load_raw(
             );
         }
 
-        return load_antigravity(&path, &id);
+        return load_antigravity(&path, &id, repo_root);
     }
 
     if let Some(sess) = trimmed_session {
@@ -1572,7 +1606,7 @@ fn load_raw(
                     path.display()
                 );
             }
-            return load_claude(&path, &id);
+            return load_claude(&path, &id, repo_root);
         }
 
         if let Some((id, path)) = resolve_antigravity_session(sess) {
@@ -1583,14 +1617,14 @@ fn load_raw(
                     path.display()
                 );
             }
-            return load_antigravity(&path, &id);
+            return load_antigravity(&path, &id, repo_root);
         }
 
         if let Some((id, path)) = resolve_codex_session(sess) {
             if verbose {
                 eprintln!("[mm] chat: using Codex log {} ({})", id, path.display());
             }
-            return load_codex(&path, &id);
+            return load_codex(&path, &id, repo_root);
         }
 
         if verbose {
@@ -1598,7 +1632,7 @@ fn load_raw(
         }
 
         let export = export_session(sess)?;
-        return parse(&export, sess);
+        return parse_with_root(&export, sess, repo_root);
     }
 
     if let Ok(opencode_session) = std::env::var(SESSION_ENV) {
@@ -1609,7 +1643,7 @@ fn load_raw(
             }
 
             let export = export_session(sess)?;
-            return parse(&export, sess);
+            return parse_with_root(&export, sess, repo_root);
         }
         return Err(format!(
             "no OpenCode session selected; set {SESSION_ENV} or pass --chat-session <ID>"
@@ -1628,7 +1662,7 @@ fn load_raw(
                     path.display()
                 );
             }
-            return load_claude(&path, &id);
+            return load_claude(&path, &id, repo_root);
         }
     }
 
@@ -1649,7 +1683,7 @@ fn load_raw(
                     path.display()
                 );
             }
-            return load_antigravity(&path, &id);
+            return load_antigravity(&path, &id, repo_root);
         }
     }
 
@@ -1661,7 +1695,7 @@ fn load_raw(
             if verbose {
                 eprintln!("[mm] chat: using Codex log {} ({})", id, path.display());
             }
-            return load_codex(&path, &id);
+            return load_codex(&path, &id, repo_root);
         }
     }
 
@@ -1698,9 +1732,9 @@ fn load_raw(
             );
         }
         return match tool {
-            "Antigravity" => load_antigravity(&path, &id),
-            "Claude Code" => load_claude(&path, &id),
-            "Codex" => load_codex(&path, &id),
+            "Antigravity" => load_antigravity(&path, &id, repo_root),
+            "Claude Code" => load_claude(&path, &id, repo_root),
+            "Codex" => load_codex(&path, &id, repo_root),
             _ => unreachable!(),
         };
     }
@@ -1779,6 +1813,15 @@ fn export_path() -> PathBuf {
 
 /// Parse the JSON produced by `opencode session export`.
 pub fn parse(export: &[u8], session_id: &str) -> Result<ChatMessage, String> {
+    parse_with_root(export, session_id, None)
+}
+
+/// Parse the JSON produced by `opencode session export`.
+pub fn parse_with_root(
+    export: &[u8],
+    session_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
     let value: Value = serde_json::from_slice(export)
         .map_err(|error| format!("invalid JSON from `opencode session export`: {error}"))?;
 
@@ -1830,17 +1873,23 @@ pub fn parse(export: &[u8], session_id: &str) -> Result<ChatMessage, String> {
     })?;
 
     let (subject, subject_source) = match title {
-        Some(title) => (title, SubjectSource::Title),
+        Some(title) => {
+            let sanitized = sanitize_current_path(&title, repo_root);
+            (sanitized, SubjectSource::Title)
+        }
         None => match latest_prompt {
-            Some(prompt) => (
-                truncate(&prompt, FALLBACK_SUBJECT_MAX),
-                SubjectSource::LatestPrompt,
-            ),
+            Some(prompt) => {
+                let sanitized = sanitize_current_path(&prompt, repo_root);
+                (
+                    truncate(&sanitized, FALLBACK_SUBJECT_MAX),
+                    SubjectSource::LatestPrompt,
+                )
+            }
             None => {
                 let line = first_line(&body).unwrap_or_else(|| body.clone());
-
+                let sanitized = sanitize_current_path(&line, repo_root);
                 (
-                    truncate(&line, FALLBACK_SUBJECT_MAX),
+                    truncate(&sanitized, FALLBACK_SUBJECT_MAX),
                     SubjectSource::LastMessage,
                 )
             }

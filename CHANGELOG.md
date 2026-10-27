@@ -4,6 +4,7 @@
 
 ### Changes
 
+- Auto-formatted AI Agent chat subjects according to commitlint rules (inferring missing conventional commit prefixes from repository file changes, stripping trailing full stops, and adjusting header casing and length limits).
 - Added support for copying commit messages from OpenAI Codex session transcripts (`--codex` and `--codex-session`).
 - Added support for copying commit messages from Claude Code session transcripts (`--claude` and `--claude-session`).
 - Replaced references to the current repository path (such as `~/w/auto-commit/rust/`) with `./` in commit messages copied from AI Agent logs.

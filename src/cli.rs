@@ -284,7 +284,28 @@ pub fn execute(options: &Options) -> Result<(), String> {
 
         match chat_result {
             Ok(chat) => {
-                let msg = chat.message(options.message.as_deref());
+                let policy = load_policy(options, &directory).unwrap_or_default();
+                let settings = config::load(&directory).unwrap_or_default();
+                let initial_subject = options
+                    .message
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|v| !v.is_empty())
+                    .unwrap_or(&chat.subject);
+
+                let formatted_header = if settings.conventional_commits {
+                    crate::generate::format_chat_header(initial_subject, &changes.files, &policy)
+                } else {
+                    initial_subject.to_string()
+                };
+
+                let msg = if chat.body.is_empty() {
+                    formatted_header
+                } else {
+                    format!("{formatted_header}\n\n{}", chat.body)
+                };
+                let msg = chat::sanitize_current_path(&msg, Some(&directory));
+
                 if msg.is_empty() {
                     if options.verbose {
                         eprintln!(

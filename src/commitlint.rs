@@ -97,6 +97,56 @@ impl Kind {
     }
 }
 
+fn is_conventional_preset(name: &str) -> bool {
+    matches!(
+        name,
+        "@commitlint/config-conventional"
+            | "config-conventional"
+            | "@commitlint/config-angular"
+            | "config-angular"
+    )
+}
+
+fn merge_conventional_base(mut policy: Policy) -> Policy {
+    let base = Policy {
+        types: Some(vec![
+            "build".to_string(),
+            "chore".to_string(),
+            "ci".to_string(),
+            "docs".to_string(),
+            "feat".to_string(),
+            "fix".to_string(),
+            "perf".to_string(),
+            "refactor".to_string(),
+            "revert".to_string(),
+            "style".to_string(),
+            "test".to_string(),
+        ]),
+        type_case: Some(Case::Lower),
+        type_required: true,
+        header_max_length: Some(100),
+        strip_full_stop: Some(".".to_string()),
+        ..Policy::default()
+    };
+
+    if policy.types.is_none() {
+        policy.types = base.types;
+    }
+    if policy.type_case.is_none() {
+        policy.type_case = base.type_case;
+    }
+    if !policy.type_forbidden && !policy.type_required {
+        policy.type_required = base.type_required;
+    }
+    if policy.header_max_length.is_none() {
+        policy.header_max_length = base.header_max_length;
+    }
+    if policy.strip_full_stop.is_none() {
+        policy.strip_full_stop = base.strip_full_stop;
+    }
+    policy
+}
+
 /// Load the nearest commitlint configuration, if there is one.
 ///
 /// `explicit` comes from `--config` and is an error when it cannot be read.
@@ -135,13 +185,23 @@ pub fn load(start: &Path, explicit: Option<&Path>) -> Result<Option<Commitlint>,
     if kind.is_javascript() || !extends.is_empty() {
         match load_with_node(&path, kind) {
             Ok(loaded) => {
-                let policy = policy_from_rules(&loaded.rules)?;
+                let mut policy = policy_from_rules(&loaded.rules)?;
 
                 if loaded.via == "direct" && !loaded.extends.is_empty() {
-                    warnings.push(format!(
-                        "`extends` was not resolved because @commitlint/load is not available: {}",
-                        loaded.extends.join(", ")
-                    ));
+                    let mut unhandled = Vec::new();
+                    for ext in &loaded.extends {
+                        if is_conventional_preset(ext) {
+                            policy = merge_conventional_base(policy);
+                        } else {
+                            unhandled.push(ext.clone());
+                        }
+                    }
+                    if !unhandled.is_empty() {
+                        warnings.push(format!(
+                            "`extends` was not resolved because @commitlint/load is not available: {}",
+                            unhandled.join(", ")
+                        ));
+                    }
                 }
                 if let Some(warning) = loaded.warning {
                     warnings.push(warning);
@@ -162,15 +222,28 @@ pub fn load(start: &Path, explicit: Option<&Path>) -> Result<Option<Commitlint>,
                     ));
                 }
 
-                warnings.push(format!(
-                    "`extends` was not resolved because @commitlint/load could not run: {error}"
-                ));
+                let mut unhandled = Vec::new();
+                for ext in &extends {
+                    if !is_conventional_preset(ext) {
+                        unhandled.push(ext.clone());
+                    }
+                }
+                if !unhandled.is_empty() {
+                    warnings.push(format!(
+                        "`extends` was not resolved because @commitlint/load could not run: {error}"
+                    ));
+                }
             }
         }
     }
 
     let config = native.unwrap_or(Value::Null);
-    let policy = policy_from_rules(rules_of(&config))?;
+    let mut policy = policy_from_rules(rules_of(&config))?;
+    for ext in &extends {
+        if is_conventional_preset(ext) {
+            policy = merge_conventional_base(policy);
+        }
+    }
 
     Ok(Some(Commitlint {
         source: path,

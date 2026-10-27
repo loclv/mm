@@ -178,7 +178,7 @@ impl Policy {
                 .is_some_and(|scopes| scopes.iter().any(|item| item == value))
     }
 
-    fn fallback_type(&self) -> Option<String> {
+    pub fn fallback_type(&self) -> Option<String> {
         if let Some(types) = &self.types {
             if let Some(preferred) = FALLBACK_TYPES
                 .iter()
@@ -222,6 +222,25 @@ impl Policy {
                 .is_none_or(|max| chars(subject).count() <= max)
     }
 
+    fn strip_trailing_stops(&self, mut subject: String) -> String {
+        if let Some(suffix) = &self.strip_full_stop {
+            while let Some(trimmed) = subject.strip_suffix(suffix) {
+                subject = trimmed.trim_end().to_string();
+            }
+            if suffix == "." {
+                while subject.ends_with('.') {
+                    subject.pop();
+                }
+                subject = subject.trim_end().to_string();
+            }
+            if subject.ends_with(':') {
+                subject.pop();
+                subject = subject.trim_end().to_string();
+            }
+        }
+        subject
+    }
+
     /// Remove a forbidden trailing full stop and enforce length limits.
     ///
     /// Length limits are applied last, so a generated message always has a
@@ -230,16 +249,11 @@ impl Policy {
         let header = first_line(message).to_string();
         let (prefix, subject) = split_header(&header);
 
-        let mut subject = subject.to_string();
-
-        if let Some(suffix) = &self.strip_full_stop
-            && let Some(trimmed) = subject.strip_suffix(suffix)
-        {
-            subject = trimmed.trim_end().to_string();
-        }
+        let mut subject = self.strip_trailing_stops(subject.to_string());
 
         if let Some(max) = self.subject_max_length {
             subject = truncate(&subject, max);
+            subject = self.strip_trailing_stops(subject);
         }
 
         if let Some(max) = self.header_max_length {
@@ -252,6 +266,7 @@ impl Policy {
 
             if chars(&subject).count() > available {
                 subject = truncate(&subject, available);
+                subject = self.strip_trailing_stops(subject);
             }
         }
 
@@ -292,7 +307,7 @@ pub fn compose_type_scope(type_part: &str, scope: Option<&str>) -> String {
 }
 
 /// Split a header into the type/custom prefix and the subject.
-fn split_header(header: &str) -> (&str, &str) {
+pub fn split_header(header: &str) -> (&str, &str) {
     match header.split_once(':') {
         Some((prefix, subject)) => (prefix.trim(), subject.trim()),
         None => ("", header.trim()),

@@ -23,9 +23,8 @@ Pipeline (path-based): `cli::run` → `Git::discover` → `Git::changes` →
 `Git::commit`.
 
 Pipeline (`--chat`): `cli::run` → `Git::discover` → `Git::changes` →
-`chat::load` → `ChatMessage::message` → `Git::commit`. Chat mode does not load
-`mm.json` or commitlint unless copying from chat fails, in which case it
-automatically falls back to the path-based pipeline.
+`chat::load` → (format subject with `Policy` if conventional commits enabled) → `Git::commit`.
+Chat mode falls back to the full path-based pipeline if copying from chat fails.
 
 - `src/cli.rs` parses arguments by hand (no clap). A new option needs fields in
   `Options`, a `parse_args` arm, `HELP`, and tests.
@@ -77,9 +76,10 @@ automatically falls back to the path-based pipeline.
     References to the current repository directory (e.g. `~/w/auto-commit/rust/` or
     `file:///Users/user/.../rust/`) are replaced with `./`.
 - `Policy` intentionally supports only rules that shape the single-line header
-  (type/scope/length/full stop). Bodies, footers and trailers are never
-  generated except in `--chat` mode, which copies the last assistant message and
-  bypasses commitlint shaping.
+  (type/scope/length/full stop). In `--chat` mode, the subject header is shaped
+  by Policy (inferring prefix if missing, adjusting case, stripping full stops,
+  and enforcing length) when conventional commits are enabled, while the body
+  copies the assistant message intact.
 - Change selection is compatibility behavior: staged changes win; otherwise
   tracked worktree changes are committed with `.` as a pathspec; untracked files
   only with `--add`. `--print` must not mutate the repository (`--add` is skipped

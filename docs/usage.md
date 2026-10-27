@@ -169,9 +169,9 @@ The message is built like this:
 - `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path and implies `--chat`.
 - `--message` overrides the subject; the copied assistant message remains the body.
 - Privacy and path sanitization: Absolute user file links (such as `file:///Users/user/...` or `file:///home/user/...`) copied from chat logs are automatically replaced with `~/...` to prevent leaking local user names in commit messages. Paths referring to the current repository directory (such as `~/w/auto-commit/rust/` or `file:///.../rust/`) are replaced with `./`.
+- Commitlint prefix auto-formatting: When Conventional Commits are enabled (the default), `mm` formats the chat subject according to commitlint rules (e.g. `@commitlint/config-conventional`). If the copied subject lacks a conventional `type:` prefix, `mm` infers one from git changes, formats the subject casing, strips trailing full stops (such as `...` or `.`), and fits the header within length limits. The assistant response body is preserved.
 
-`--chat` / `--agy` / `--claude` / `--codex` skips path-based generation, `mm.json` formatting, and commitlint
-message shaping when a chat log is successfully loaded. If copying the log from
+`--chat` / `--agy` / `--claude` / `--codex` uses the chat subject (shaped by commitlint when enabled) and copied body. If copying the log from
 the AI Agent fails (for example, missing session, no transcript found, CLI failure,
 or empty messages), `mm` automatically falls back to path-based commit message
 generation instead of aborting with an error. In `--verbose` mode, the failure and
@@ -189,8 +189,7 @@ configs are evaluated with `node`; `extends` presets additionally require
 Applied rules are the ones that affect the generated header: type and scope
 enums/case, type/scope presence, type/header/subject length, and trailing full
 stops. Rules for bodies, footers, and trailers are not applied to generated
-messages because `mm` writes only a one-line header. `--chat`, `--agy`, `--claude`, and `--codex` copy a
-multi-line message and bypass these generation rules.
+messages because `mm` writes only a one-line header. In chat modes (`--chat`, `--agy`, `--claude`, and `--codex`), `mm` applies header shaping rules (type prefix, casing, length, and trailing full stop removal) to the subject line, while copying the assistant body intact.
 
 Use an explicit config with:
 

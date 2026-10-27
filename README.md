@@ -85,7 +85,7 @@ mm --codex          # commit using the latest Codex log
 - `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path.
 - `--message` overrides the subject; the copied message remains the body.
 - User file URIs like `file:///Users/user/...` are sanitized to `~/...` to prevent leaking local user names, and references to the current repository directory are sanitized to `./`.
-- `--chat`, `--agy`, `--claude`, and `--codex` skip path-based generation and commitlint message shaping.
+- When Conventional Commits are enabled, commitlint rules shape the copied chat subject: inferring a missing conventional `type:` prefix from git changes, formatting casing, stripping forbidden trailing full stops, and fitting length limits. The assistant body is copied intact.
 - If copying the log from the AI Agent fails, `mm` automatically falls back to generating the commit message from Git changes.
 
 ### How changes are selected
@@ -136,8 +136,9 @@ Applied rules:
 Rules about bodies, footers, commit trailers and the case of free-form subjects
 are not applied to generated messages, because `mm` writes only a header. An
 explicit `--message` value is treated as an override and its prefix is kept.
-`--chat` copies its subject and body from the session and bypasses these
-generation rules.
+In chat modes (`--chat`, `--agy`, `--claude`, `--codex`), header shaping rules
+(type prefix, casing, length, and trailing full stop removal) are applied to the
+subject, while copying the assistant body intact.
 
 ```sh
 # .commitlintrc.yml

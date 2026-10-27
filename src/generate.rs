@@ -272,6 +272,133 @@ pub fn action_of(change: &FileChange) -> Result<Action, String> {
     lookup_action(change.x)
 }
 
+const STANDARD_CONVENTIONAL_TYPES: [&str; 11] = [
+    "feat", "fix", "docs", "style", "refactor", "perf", "test", "build", "ci", "chore", "revert",
+];
+
+/// Format the subject start to follow conventional commit casing:
+/// If the first word starts with an uppercase letter followed by lowercase
+/// (e.g. `Add`, `Fix`, `Implement`), lowercase the initial character.
+/// Acronyms (e.g. `CLI`, `API`, `JSON`) are preserved.
+pub fn format_subject_start(subject: &str) -> String {
+    let mut chars = subject.chars();
+    let first = match chars.next() {
+        Some(c) => c,
+        None => return String::new(),
+    };
+    let second = chars.next();
+    if first.is_ascii_uppercase() && second.is_some_and(|c| c.is_ascii_lowercase()) {
+        let mut res = first.to_ascii_lowercase().to_string();
+        if let Some(s) = second {
+            res.push(s);
+        }
+        res.push_str(chars.as_str());
+        res
+    } else {
+        subject.to_string()
+    }
+}
+
+/// Check if a header string already has a valid Conventional Commit prefix
+/// (such as `feat: ...`, `fix(cli): ...`, or `chore!: ...`).
+pub fn has_conventional_prefix(header: &str, policy: &Policy) -> bool {
+    let Some((prefix, _)) = header.split_once(": ") else {
+        return false;
+    };
+
+    let prefix = prefix.trim();
+    let (type_part, scope) = crate::policy::split_type_scope(prefix);
+
+    if type_part.is_empty() {
+        return false;
+    }
+
+    if !type_part
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+    {
+        return false;
+    }
+
+    if let Some(s) = scope
+        && (s.is_empty()
+            || !s
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '/' || c == '.'))
+    {
+        return false;
+    }
+
+    let type_lower = type_part.to_ascii_lowercase();
+
+    if let Some(allowed) = &policy.types {
+        allowed.iter().any(|t| t.eq_ignore_ascii_case(&type_lower))
+    } else {
+        STANDARD_CONVENTIONAL_TYPES.contains(&type_lower.as_str())
+    }
+}
+
+/// Infer the Conventional Commit type/scope prefix from file changes and policy.
+pub fn infer_type_prefix(changes: &[FileChange], policy: &Policy) -> String {
+    let mut auto = msg_from_changes(changes).unwrap_or_else(|_| msg_count(changes));
+
+    if auto.type_prefix.is_empty() {
+        let types: Vec<ConventionalType> = changes
+            .iter()
+            .filter_map(|c| {
+                lookup_action(c.x)
+                    .map(|action| get_convention_type(action, &c.from))
+                    .ok()
+            })
+            .collect();
+
+        let primary = if types.contains(&ConventionalType::Feat) {
+            ConventionalType::Feat
+        } else if types.contains(&ConventionalType::Fix) {
+            ConventionalType::Fix
+        } else if types.contains(&ConventionalType::Refactor) {
+            ConventionalType::Refactor
+        } else if types.contains(&ConventionalType::Docs) {
+            ConventionalType::Docs
+        } else if types.contains(&ConventionalType::Test) {
+            ConventionalType::Test
+        } else if types.contains(&ConventionalType::BuildDependencies) {
+            ConventionalType::BuildDependencies
+        } else {
+            ConventionalType::Chore
+        };
+
+        auto.type_prefix = primary.as_str().to_string();
+    }
+
+    policy.apply_to_type(&mut auto);
+
+    if auto.type_prefix.is_empty() {
+        policy
+            .fallback_type()
+            .unwrap_or_else(|| "chore".to_string())
+    } else {
+        auto.type_prefix
+    }
+}
+
+/// Format a chat subject to follow Conventional Commit policy when required.
+pub fn format_chat_header(subject: &str, changes: &[FileChange], policy: &Policy) -> String {
+    if policy.is_empty() {
+        return subject.to_string();
+    }
+
+    let header = if has_conventional_prefix(subject, policy) {
+        subject.to_string()
+    } else {
+        let prefix = infer_type_prefix(changes, policy);
+        let formatted = format_subject_start(subject);
+        format!("{prefix}: {formatted}")
+    };
+
+    policy.fit(&header)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -497,5 +624,70 @@ mod tests {
     #[test]
     fn handles_zero_changes() {
         assert_eq!(generate_msg(&[], None).unwrap(), "");
+    }
+
+    #[test]
+    fn tests_has_conventional_prefix() {
+        let policy = Policy::default();
+        assert!(has_conventional_prefix("feat: add thing", &policy));
+        assert!(has_conventional_prefix("fix(cli): add thing", &policy));
+        assert!(has_conventional_prefix("chore!: breaking", &policy));
+        assert!(has_conventional_prefix("build(deps)!: bump", &policy));
+
+        assert!(!has_conventional_prefix("Add chat import", &policy));
+        assert!(!has_conventional_prefix(
+            "if current path is \"./\" then replace message with:...",
+            &policy
+        ));
+        assert!(!has_conventional_prefix("Note: please check", &policy));
+        assert!(!has_conventional_prefix("docs:update", &policy));
+    }
+
+    #[test]
+    fn formats_subject_start_casing() {
+        assert_eq!(format_subject_start("Add chat import"), "add chat import");
+        assert_eq!(format_subject_start("Fix null check"), "fix null check");
+        assert_eq!(format_subject_start("CLI option"), "CLI option");
+        assert_eq!(format_subject_start("already lower"), "already lower");
+    }
+
+    #[test]
+    fn formats_chat_header_with_policy() {
+        let policy = Policy {
+            types: Some(vec!["feat".to_string(), "docs".to_string()]),
+            strip_full_stop: Some(".".to_string()),
+            header_max_length: Some(120),
+            ..Policy::default()
+        };
+
+        let changes = [change('M', "src/chat.rs", "")];
+
+        // Missing prefix gets auto-added and trailing dots/colons stripped
+        assert_eq!(
+            format_chat_header(
+                "if current path is \"./\" then replace message with:...",
+                &changes,
+                &policy
+            ),
+            "feat: if current path is \"./\" then replace message with"
+        );
+
+        // Capitalized subject gets lowercased
+        assert_eq!(
+            format_chat_header("Add chat import", &changes, &policy),
+            "feat: add chat import"
+        );
+
+        // Existing prefix is preserved
+        assert_eq!(
+            format_chat_header("docs: update usage guide.", &changes, &policy),
+            "docs: update usage guide"
+        );
+
+        // Empty policy leaves subject as-is
+        assert_eq!(
+            format_chat_header("raw subject", &changes, &Policy::default()),
+            "raw subject"
+        );
     }
 }

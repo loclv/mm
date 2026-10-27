@@ -1222,3 +1222,47 @@ fn copies_codex_session_with_title_from_session_index() {
 
     let _ = fs::remove_dir_all(codex_dir);
 }
+
+#[test]
+fn chat_auto_adds_commitlint_prefix_when_commitlint_is_configured() {
+    let repo = Repo::new();
+    repo.write(
+        ".commitlintrc.json",
+        r#"{
+  "extends": ["@commitlint/config-conventional"],
+  "rules": {
+    "header-max-length": [2, "always", 120]
+  }
+}"#,
+    );
+    repo.write("src/lib.rs", "pub fn hello() {}\n");
+    repo.git(&["add", "src/lib.rs"]);
+
+    let brain =
+        std::env::temp_dir().join(format!("mm-test-brain-commitlint-{}", std::process::id()));
+    let conv_dir = brain.join("conv-commitlint");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let repo_path = repo.path().display().to_string();
+    let transcript = format!(
+        r#"{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nadd feature in file://{repo_path}/src/lib.rs...\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: {repo_path}/src/lib.rs\n</ADDITIONAL_METADATA>"}}
+{{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Done."}}
+"#
+    );
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--agy", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "feat: add feature in ./src/lib.rs\n\nDone."
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}
