@@ -363,6 +363,20 @@ fn honours_a_custom_type_enum() {
 }
 
 #[test]
+fn honours_conventional_extends_in_commitlintrc_json() {
+    let repo = Repo::new();
+    repo.write(".commitlintrc.json", r#"{ "extends": ["conventional"] }"#);
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let output = repo.mm(&["--print"]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stderr(&output), "");
+    assert_eq!(stdout(&output), "feat: create foo.txt");
+}
+
+#[test]
 fn honours_yaml_configuration() {
     let repo = Repo::new();
     repo.write(

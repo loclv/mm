@@ -101,9 +101,13 @@ fn is_conventional_preset(name: &str) -> bool {
     matches!(
         name,
         "@commitlint/config-conventional"
+            | "commitlint-config-conventional"
             | "config-conventional"
+            | "conventional"
             | "@commitlint/config-angular"
+            | "commitlint-config-angular"
             | "config-angular"
+            | "angular"
     )
 }
 
@@ -516,6 +520,7 @@ struct NodeConfig {
 /// resolved with commitlint's own resolution rules. If it is missing, the config
 /// file is imported directly and only its local rules are used.
 const NODE_LOADER: &str = r#"
+const fs = require('node:fs');
 const path = require('node:path');
 const { createRequire } = require('node:module');
 const { pathToFileURL } = require('node:url');
@@ -568,9 +573,26 @@ function emit(rules, extra) {
     throw new Error('@commitlint/load is not installed');
   }
 
-  const url = pathToFileURL(file).href;
-  const mod = await import(url);
-  const config = (mod && (mod.default || mod)) || {};
+  let config = {};
+  const ext = path.extname(file).toLowerCase();
+  if (ext === '.json' || ext === '.jsonc') {
+    config = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } else if (ext === '.yaml' || ext === '.yml') {
+    throw loadError || new Error('@commitlint/load is not installed');
+  } else {
+    try {
+      const url = pathToFileURL(file).href;
+      const mod = await import(url);
+      config = (mod && (mod.default || mod)) || {};
+    } catch (importErr) {
+      try {
+        config = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch {
+        throw importErr;
+      }
+    }
+  }
+
   const extended = Array.isArray(config.extends)
     ? config.extends
     : (config.extends ? [config.extends] : []);
@@ -952,6 +974,41 @@ mod tests {
         let config = load(&dir.path, Some(&path)).unwrap().unwrap();
 
         assert_eq!(config.policy.types, Some(vec!["wip".to_string()]));
+    }
+
+    #[test]
+    fn loads_commitlintrc_json_with_conventional_extends() {
+        let dir = TempDir::new();
+        let path = dir.write(".commitlintrc.json", r#"{ "extends": ["conventional"] }"#);
+
+        let config = load(&dir.path, Some(&path)).unwrap().unwrap();
+
+        assert!(
+            config.warnings.is_empty(),
+            "unexpected warnings: {:?}",
+            config.warnings
+        );
+        assert!(config.policy.types.is_some());
+        assert!(config.policy.types.unwrap().contains(&"feat".to_string()));
+    }
+
+    #[test]
+    fn loads_commitlintrc_json_with_scoped_conventional_extends() {
+        let dir = TempDir::new();
+        let path = dir.write(
+            ".commitlintrc.json",
+            r#"{ "extends": ["@commitlint/config-conventional"] }"#,
+        );
+
+        let config = load(&dir.path, Some(&path)).unwrap().unwrap();
+
+        assert!(
+            config.warnings.is_empty(),
+            "unexpected warnings: {:?}",
+            config.warnings
+        );
+        assert!(config.policy.types.is_some());
+        assert!(config.policy.types.unwrap().contains(&"feat".to_string()));
     }
 
     #[test]
