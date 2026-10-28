@@ -7,11 +7,5 @@
 	},
 	"[markdown]": {
 		"editor.defaultFormatter": "loclv.agent-md-formatter"
-	},
-	"[css]": {
-		"editor.defaultFormatter": "biomejs.biome"
-	},
-	"markdownlint.config": {
-		"default": false
 	}
 }
