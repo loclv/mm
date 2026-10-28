@@ -98,8 +98,6 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
 
 ## Environment gotchas
 
-- This crate is the repository root; run Cargo here, not from a parent `rust/`
-  subdirectory.
 - Integration tests need `git` on `PATH` and a writable temp directory.
 - Stale build artifacts: if the repo is moved, an existing `target/` can
   retain a compiled `CARGO_BIN_EXE_mm` absolute path from the old location. The
