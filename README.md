@@ -189,8 +189,8 @@ mm --print
 
 - One file: `feat: create foo.rs`, `docs: update README.md`,
   `chore: delete old.txt`, `chore: rename a.rs to b.rs`
-- Two to four files: names are listed, e.g. `update src/main.rs and src/lib.rs`; mixed
-  actions fall back to counts
+- Two to four files: names are listed grouped by action, e.g. `update src/main.rs and src/lib.rs`
+  or `docs: update guide.md and create api.md`
 - Five or more files: counts are used, e.g. `update 5 files`
 - The type is inferred from the changed paths. When changes disagree or a type
   cannot be determined, the default is `chore`

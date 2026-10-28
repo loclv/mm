@@ -106,29 +106,53 @@ pub fn count_files_desc(changes: &[FileChange]) -> String {
 
 /// Describe several changes by listing their names.
 ///
-/// When the actions differ, this falls back to counts so that the message does
-/// not claim every file changed in the same way.
+/// Changes are grouped by action, preserving the order Git reported.
+/// When any action is unknown, this falls back to counts.
 pub fn named_files_desc(changes: &[FileChange]) -> String {
-    let all_same_action = changes
-        .iter()
-        .map(|change| change.x)
-        .all(|x| x == changes[0].x);
-
-    if !all_same_action {
-        return count_files_desc(changes);
+    if changes.is_empty() {
+        return String::new();
     }
 
-    let action = match lookup_action(changes[0].x) {
-        Ok(action) => action,
-        Err(_) => return count_files_desc(changes),
-    };
+    enum NamedGroup {
+        Action(Action, Vec<String>),
+        Rename(String),
+    }
 
-    let paths: Vec<String> = changes
-        .iter()
-        .map(|change| change.from.to_string())
+    let mut groups: Vec<NamedGroup> = Vec::new();
+
+    for change in changes {
+        let action = match lookup_action(change.x) {
+            Ok(action) => action,
+            Err(_) => return count_files_desc(changes),
+        };
+
+        if action == Action::Rename {
+            groups.push(NamedGroup::Rename(move_or_rename_msg(
+                &change.from,
+                &change.to,
+            )));
+        } else {
+            match groups.iter_mut().find_map(|g| match g {
+                NamedGroup::Action(act, paths) if *act == action => Some(paths),
+                _ => None,
+            }) {
+                Some(paths) => paths.push(change.from.to_string()),
+                None => groups.push(NamedGroup::Action(action, vec![change.from.to_string()])),
+            }
+        }
+    }
+
+    let messages: Vec<String> = groups
+        .into_iter()
+        .map(|group| match group {
+            NamedGroup::Action(action, paths) => {
+                format!("{} {}", action.as_str(), human_list(&paths))
+            }
+            NamedGroup::Rename(msg) => msg,
+        })
         .collect();
 
-    format!("{} {}", action.as_str(), human_list(&paths))
+    join(&messages)
 }
 
 #[cfg(test)]
@@ -200,6 +224,32 @@ mod tests {
         assert_eq!(
             count_files_desc(&changes),
             "update 1 file and create 1 file"
+        );
+    }
+
+    #[test]
+    fn names_when_actions_differ() {
+        let changes = [
+            change('M', "src/main.rs", ""),
+            change('A', "src/new.rs", ""),
+        ];
+
+        assert_eq!(
+            named_files_desc(&changes),
+            "update src/main.rs and create src/new.rs"
+        );
+    }
+
+    #[test]
+    fn names_moves_and_updates() {
+        let changes = [
+            change('R', "src/foo.rs", "lib/foo.rs"),
+            change('M', "src/main.rs", ""),
+        ];
+
+        assert_eq!(
+            named_files_desc(&changes),
+            "move foo.rs to lib and update src/main.rs"
         );
     }
 

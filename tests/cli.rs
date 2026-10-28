@@ -1588,7 +1588,26 @@ fn all_markdown_files_created_updated_deleted_use_docs_prefix() {
     assert!(output.status.success(), "{}", stderr(&output));
     assert_eq!(
         stdout(&output),
-        "docs: create 1 file, update 1 file and delete 1 file"
+        "docs: create created.md, update edit.md and delete old.md"
+    );
+}
+
+#[test]
+fn all_markdown_files_updated_and_created_use_docs_prefix_with_file_names() {
+    let repo = Repo::new();
+    repo.write("guide.md", "# Guide\n");
+    repo.git(&["add", "guide.md"]);
+    repo.git(&["commit", "-m", "docs: initial docs"]);
+
+    repo.write("guide.md", "# Guide updated\n");
+    repo.write("summary.md", "# Summary\n");
+    repo.git(&["add", "guide.md", "summary.md"]);
+
+    let output = repo.mm(&["--print"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "docs: update guide.md and create summary.md"
     );
 }
 

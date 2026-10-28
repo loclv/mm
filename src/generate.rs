@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn falls_back_to_counts_for_mixed_actions() {
+    fn formats_mixed_actions_with_file_names() {
         let changes = [
             change('M', "src/main.rs", ""),
             change('A', "src/new.rs", ""),
@@ -573,7 +573,7 @@ mod tests {
 
         assert_eq!(
             generate_msg(&changes, None).unwrap(),
-            "chore: update 1 file and create 1 file"
+            "chore: update src/main.rs and create src/new.rs"
         );
     }
 
