@@ -83,39 +83,39 @@ session, --agy to copy from Antigravity, --claude to copy from Claude Code, --co
 to copy from Codex, or --devin to copy from Devin / Codeium.
 
 Options:
-  -a, --add              Stage all changes, including untracked files, first
-  -e, --edit             Open the commit message in an editor before committing
-  -p, --print            Print the generated message and exit without committing
-  -d, --dry-run          Alias for --print
-  -m, --message <MSG>    Merge the generated description (or override a chat subject)
-      --chat             Copy the chat title and last message (OpenCode, Antigravity, Claude Code, Codex, or Devin)
-      --chat-session <ID>  Use a specific session ID or transcript path (implies --chat)
-      --agy, --antigravity Copy the Antigravity last log commit message (implies --chat)
-      --agy-session <ID>   Use a specific Antigravity conversation (implies --agy)
-      --claude           Copy the Claude Code last log commit message (implies --chat)
-      --claude-session <ID> Use a specific Claude Code session (implies --claude)
-      --codex            Copy the Codex last log commit message (implies --chat)
-      --codex-session <ID>  Use a specific Codex session (implies --codex)
-      --devin, --codeium Copy the Devin / Codeium last log commit message (implies --chat)
-      --devin-session <ID>  Use a specific Devin / Codeium session (implies --devin)
-  -c, --config <FILE>    Use this commitlint configuration instead of searching
-  -s, --staged           Only use staged changes; never fall back to unstaged
-      --no-verify        Bypass Git commit hooks
-      --verbose          Show what the tool is doing on stderr
-  -n, --no-edit          Accepted for compatibility; editing is off by default
-  -h, --help             Show this help and exit
-  -v, -V, --version      Show the version and exit
+  -a, --add # Stage all changes, including untracked files, first
+  -e, --edit # Open the commit message in an editor before committing
+  -p, --print # Print the generated message and exit without committing
+  -d, --dry-run # Alias for --print
+  -m, --message <MSG> # Merge the generated description (or override a chat subject)
+      --chat # Copy the chat title and last message (OpenCode, Antigravity, Claude Code, Codex, or Devin)
+      --chat-session <ID> # Use a specific session ID or transcript path (implies --chat)
+      --agy, --antigravity # Copy the Antigravity last log commit message (implies --chat)
+      --agy-session <ID> # Use a specific Antigravity conversation (implies --agy)
+      --claude # Copy the Claude Code last log commit message (implies --chat)
+      --claude-session <ID> # Use a specific Claude Code session (implies --claude)
+      --codex # Copy the Codex last log commit message (implies --chat)
+      --codex-session <ID> # Use a specific Codex session (implies --codex)
+      --devin, --codeium # Copy the Devin / Codeium last log commit message (implies --chat)
+      --devin-session <ID> # Use a specific Devin / Codeium session (implies --devin)
+  -c, --config <FILE> # Use this commitlint configuration instead of searching
+  -s, --staged # Only use staged changes; never fall back to unstaged
+      --no-verify # Bypass Git commit hooks
+      --verbose # Show what the tool is doing on stderr
+  -n, --no-edit # Accepted for compatibility; editing is off by default
+  -h, --help # Show this help and exit
+  -v, -V, --version # Show the version and exit
 
 Examples:
-  mm                     Generate a message and commit
-  mm --print             Show the message without committing
-  mm --add               Include new files, then commit
-  mm --chat --print      Preview the message copied from the current chat
-  mm --agy --print       Preview the message copied from Antigravity's last log
-  mm --claude --print    Preview the message copied from Claude Code's last log
-  mm --codex --print     Preview the message copied from Codex's last log
-  mm --devin --print     Preview the message copied from Devin's last log
-  mm -m 'JIRA-1: fix'    Keep the existing prefix/description
+  mm # Generate a message and commit
+  mm --print # Show the message without committing
+  mm --add # Include new files, then commit
+  mm --chat --print # Preview the message copied from the current chat
+  mm --agy --print # Preview the message copied from Antigravity's last log
+  mm --claude --print # Preview the message copied from Claude Code's last log
+  mm --codex --print # Preview the message copied from Codex's last log
+  mm --devin --print # Preview the message copied from Devin's last log
+  mm -m 'JIRA-1: fix' # Keep the existing prefix/description
 ";
 
 /// Parse arguments into a command.
