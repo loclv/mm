@@ -1591,3 +1591,34 @@ fn all_markdown_files_created_updated_deleted_use_docs_prefix() {
         "docs: create 1 file, update 1 file and delete 1 file"
     );
 }
+
+#[test]
+fn copies_chat_log_sanitizing_filler_tool_calls_and_ansi() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-sanitize-{}", std::process::id()));
+    let conv_dir = brain.join("conv-sanitize");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let transcript = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nimplement smart body sanitization\n</USER_REQUEST>"}
+{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"\u001b[32mSure! I will help you with that.\u001b[0m\n\n<tool_call>\n{\"name\": \"run_tests\"}\n</tool_call>\n[Tool Output: all passed]\n\nHere is a summary:\n- Stripped ANSI escapes\n- Stripped tool call residue\n- Stripped conversational filler\n\nHope this helps! Let me know if you need anything else."}
+"#;
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--agy", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "implement smart body sanitization\n\n- Stripped ANSI escapes\n- Stripped tool call residue\n- Stripped conversational filler"
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}

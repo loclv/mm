@@ -22,9 +22,9 @@ Expand and refine transcript parsing for developer AI environments.
   - Parse tasks from VS Code global storage for Roo Code / Cline tasks.
   - CLI flags: `--cline`, `--roo`.
 - [ ] Smart Body Sanitization & Noise Reduction `[Priority: High]`
-  - Strip conversational filler from assistant responses (e.g. "Sure! I will help you with...", "Here is a summary:").
-  - Strip tool call residue and ANSI escape sequences if present.
-  - Support `--max-body-lines <N>` to prevent bloated commit logs on massive multi-file refactor outputs.
+  - [x] Strip conversational filler from assistant responses (e.g. "Sure! I will help you with...", "Here is a summary:").
+  - [x] Strip tool call residue and ANSI escape sequences if present.
+  - [ ] Support `--max-body-lines <N>` to prevent bloated commit logs on massive multi-file refactor outputs.
 - [ ] Co-Author & Agent Git Trailers `[Priority: Medium]`
   - Automatically append configurable trailer in chat mode (e.g. `Co-authored-by: Antigravity <agent@antigravity.google>`).
   - Flag `--co-author` or `"trailers": [...]` setting in `mm.json`.

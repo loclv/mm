@@ -347,10 +347,11 @@ pub fn execute(options: &Options) -> Result<(), String> {
                     initial_subject.to_string()
                 };
 
-                let msg = if chat.body.is_empty() {
+                let body = chat::sanitize_chat_body(&chat.body, Some(git.root()));
+                let msg = if body.is_empty() {
                     formatted_header
                 } else {
-                    format!("{formatted_header}\n\n{}", chat.body)
+                    format!("{formatted_header}\n\n{body}")
                 };
                 let msg = chat::sanitize_current_path(&msg, Some(git.root()));
 

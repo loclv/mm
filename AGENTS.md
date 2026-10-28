@@ -78,6 +78,8 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
     specific session ID or file path. Auto-detection prioritizes logs matching the repository path.
     The subject is the session title or first line of the latest user prompt, falling back to the assistant message.
     The body is the text content from the last assistant message (excluding thinking blocks and tool calls).
+  - Smart body sanitization strips conversational filler (e.g. "Sure! I will help you with...", "Here is a summary:"),
+    polite sign-offs, tool call and thought residue (XML tags, tool fences, ReAct/CLI markers), and ANSI escape sequences.
   - `--message` overrides the copied subject. A session with no copyable text is
     an error.
   - User file URIs (`file:///Users/user/...` or `file:///home/user/...`) are

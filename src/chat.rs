@@ -92,10 +92,12 @@ impl ChatMessage {
             .filter(|value| !value.is_empty())
             .unwrap_or(&self.subject);
 
-        let msg = if self.body.is_empty() {
+        let body = sanitize_chat_body(&self.body, repo_root);
+
+        let msg = if body.is_empty() {
             subject.to_string()
         } else {
-            format!("{subject}\n\n{}", self.body)
+            format!("{subject}\n\n{body}")
         };
 
         sanitize_current_path(&msg, repo_root)
@@ -410,6 +412,763 @@ pub fn sanitize_current_path(text: &str, current_dir: Option<&Path>) -> String {
     sanitize_current_path_with_home(text, current_dir, home.as_deref())
 }
 
+/// Strip ANSI escape sequences and carriage return artifacts from terminal logs.
+pub fn strip_ansi_escapes(text: &str) -> String {
+    if !text.contains('\x1b') && !text.contains('\r') {
+        return text.to_string();
+    }
+
+    let bytes = text.as_bytes();
+    let mut result = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+
+    while i < bytes.len() {
+        if bytes[i] == b'\x1b' {
+            i += 1;
+            if i >= bytes.len() {
+                break;
+            }
+            match bytes[i] {
+                b'[' => {
+                    // CSI sequence: ESC [ [0x30-0x3F]* [0x20-0x2F]* [0x40-0x7E]
+                    i += 1;
+                    while i < bytes.len() && (0x30..=0x3f).contains(&bytes[i]) {
+                        i += 1;
+                    }
+                    while i < bytes.len() && (0x20..=0x2f).contains(&bytes[i]) {
+                        i += 1;
+                    }
+                    if i < bytes.len() && (0x40..=0x7e).contains(&bytes[i]) {
+                        i += 1;
+                    }
+                }
+                b']' => {
+                    // OSC sequence: ESC ] ... (BEL \x07 or ST ESC \)
+                    i += 1;
+                    while i < bytes.len() {
+                        if bytes[i] == 0x07 {
+                            i += 1;
+                            break;
+                        } else if bytes[i] == b'\x1b'
+                            && i + 1 < bytes.len()
+                            && bytes[i + 1] == b'\\'
+                        {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                b'(' | b')' | b'*' | b'+' => {
+                    // Character set designation: 2 bytes
+                    i += 2;
+                }
+                b'P' | b'X' | b'^' | b'_' => {
+                    // DCS, SOS, PM, APC - terminated by ST or BEL
+                    i += 1;
+                    while i < bytes.len() {
+                        if bytes[i] == 0x07 {
+                            i += 1;
+                            break;
+                        } else if bytes[i] == b'\x1b'
+                            && i + 1 < bytes.len()
+                            && bytes[i + 1] == b'\\'
+                        {
+                            i += 2;
+                            break;
+                        }
+                        i += 1;
+                    }
+                }
+                0x40..=0x5f => {
+                    // 2-byte escape sequence
+                    i += 1;
+                }
+                _ => {
+                    // Skip unrecognized escape byte
+                    i += 1;
+                }
+            }
+        } else if bytes[i] == b'\r' {
+            if i + 1 < bytes.len() && bytes[i + 1] == b'\n' {
+                result.push(b'\n');
+                i += 2;
+            } else {
+                // Standalone \r
+                i += 1;
+            }
+        } else {
+            result.push(bytes[i]);
+            i += 1;
+        }
+    }
+
+    String::from_utf8(result).unwrap_or_else(|_| text.to_string())
+}
+
+/// Strip paired XML/HTML tag blocks including their interior content.
+fn strip_xml_tag_block(text: &str, tag_name: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut remainder = text;
+    let open_prefix = format!("<{tag_name}");
+    let close_tag = format!("</{tag_name}>");
+
+    while let Some(start_idx) = remainder.to_ascii_lowercase().find(&open_prefix) {
+        let after_start = &remainder[start_idx + open_prefix.len()..];
+        let next_char = after_start.chars().next();
+        let valid_start = matches!(next_char, Some('>' | ' ' | '\t' | '\r' | '\n' | '/'));
+
+        if !valid_start {
+            result.push_str(&remainder[..start_idx + open_prefix.len()]);
+            remainder = after_start;
+            continue;
+        }
+
+        result.push_str(&remainder[..start_idx]);
+
+        if let Some(tag_end) = after_start.find('>') {
+            let inside_tag = after_start[..tag_end].trim_end();
+            if inside_tag.ends_with('/') {
+                // Self-closing: <tag ... />
+                remainder = &after_start[tag_end + 1..];
+                continue;
+            }
+
+            let after_open_tag = &after_start[tag_end + 1..];
+            if let Some(close_idx) = after_open_tag.to_ascii_lowercase().find(&close_tag) {
+                remainder = &after_open_tag[close_idx + close_tag.len()..];
+            } else {
+                // Unclosed opening tag, drop until end or next line
+                remainder = &after_start[tag_end + 1..];
+            }
+        } else {
+            remainder = after_start;
+        }
+    }
+
+    result.push_str(remainder);
+    result
+}
+
+/// Strip `<details><summary>...Thinking/Tool...</summary>...</details>` blocks.
+fn strip_details_tool_blocks(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut remainder = text;
+
+    while let Some(start_idx) = remainder.to_ascii_lowercase().find("<details") {
+        let after_start = &remainder[start_idx..];
+        let lower_after = after_start.to_ascii_lowercase();
+
+        if let Some(summary_idx) = lower_after.find("<summary") {
+            let after_summary = &lower_after[summary_idx..];
+            if let Some(summary_end) = after_summary.find("</summary>") {
+                let summary_content = &after_summary[..summary_end];
+                let is_tool_summary = summary_content.contains("thinking")
+                    || summary_content.contains("thought")
+                    || summary_content.contains("tool")
+                    || summary_content.contains("command")
+                    || summary_content.contains("ran ");
+
+                if is_tool_summary {
+                    result.push_str(&remainder[..start_idx]);
+                    if let Some(details_end) = lower_after.find("</details>") {
+                        remainder = &after_start[details_end + "</details>".len()..];
+                        continue;
+                    } else {
+                        // Unclosed <details>, drop until end
+                        remainder = "";
+                        break;
+                    }
+                }
+            }
+        }
+
+        result.push_str(&remainder[..start_idx + "<details".len()]);
+        remainder = &remainder[start_idx + "<details".len()..];
+    }
+
+    result.push_str(remainder);
+    result
+}
+
+/// Check if code block fence info string indicates a tool invocation or result.
+fn is_tool_fence_info(info: &str) -> bool {
+    let lower = info.to_ascii_lowercase();
+    lower.starts_with("tool_call")
+        || lower.starts_with("tool_use")
+        || lower.starts_with("tool_result")
+        || lower.starts_with("tool_output")
+        || lower.starts_with("function_call")
+        || lower.contains(":tool_call")
+        || lower.contains(":tool_use")
+}
+
+/// Check if a trimmed line is a tool/thought marker or raw tool JSON.
+fn is_tool_marker_line(trimmed: &str) -> bool {
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+
+    let markers = [
+        "action:",
+        "action input:",
+        "observation:",
+        "[action:",
+        "[action ",
+        "[observation:",
+        "[tool call:",
+        "[tool use:",
+        "[tool result:",
+        "[tool output:",
+        "[tool:",
+        "[running command:",
+        "[command output:",
+        "[command stderr:",
+        "[command stdout:",
+        "command stdout:",
+        "command stderr:",
+        "tool call:",
+        "tool result:",
+        "tool output:",
+        "executing tool:",
+        "calling tool:",
+        "ran command:",
+        "thinking process:",
+        "thinking:",
+    ];
+
+    for marker in &markers {
+        if lower.starts_with(marker) {
+            return true;
+        }
+    }
+
+    let lone_tags = [
+        "</tool_call>",
+        "<tool_call>",
+        "</tool_use>",
+        "<tool_use>",
+        "</tool_result>",
+        "<tool_result>",
+        "</tool_output>",
+        "<tool_output>",
+        "</thought>",
+        "<thought>",
+        "</thinking>",
+        "<thinking>",
+        "</function_call>",
+        "<function_call>",
+    ];
+
+    for tag in &lone_tags {
+        if lower == *tag {
+            return true;
+        }
+    }
+
+    if lower.starts_with('{')
+        && lower.ends_with('}')
+        && ((lower.contains("\"name\":")
+            && (lower.contains("\"arguments\":") || lower.contains("\"parameters\":")))
+            || lower.contains("\"tool\":")
+            || lower.contains("\"tool_name\":")
+            || lower.contains("\"tool_input\":"))
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Strip tool call residue (XML tags, tool code blocks, and ReAct/CLI markers).
+pub fn strip_tool_residue(text: &str) -> String {
+    let mut current = text.to_string();
+
+    let xml_tags = [
+        "tool_call",
+        "tool_use",
+        "tool_result",
+        "tool_output",
+        "function_call",
+        "function_calls",
+        "antml:function_call",
+        "thought",
+        "thinking",
+    ];
+
+    for tag in xml_tags {
+        current = strip_xml_tag_block(&current, tag);
+    }
+
+    current = strip_xml_tag_block(&current, "invoke");
+    current = strip_details_tool_blocks(&current);
+
+    let mut lines = Vec::new();
+    let mut in_tool_fence = false;
+
+    for line in current.lines() {
+        let trimmed = line.trim();
+
+        if trimmed.starts_with("```") {
+            let after_fence = trimmed.trim_start_matches('`').trim().to_ascii_lowercase();
+            if !in_tool_fence {
+                if is_tool_fence_info(&after_fence) {
+                    in_tool_fence = true;
+                    continue;
+                }
+            } else {
+                in_tool_fence = false;
+                continue;
+            }
+        }
+
+        if in_tool_fence {
+            continue;
+        }
+
+        if is_tool_marker_line(trimmed) {
+            continue;
+        }
+
+        lines.push(line);
+    }
+
+    collapse_blank_lines(&lines.join("\n"))
+}
+
+/// Check if a line is a structural markdown element (heading, list item, or code fence)
+/// that should never be considered conversational filler.
+fn is_structural_line(trimmed: &str) -> bool {
+    trimmed.starts_with('#')
+        || trimmed.starts_with("```")
+        || trimmed.starts_with("- ")
+        || trimmed.starts_with("* ")
+        || trimmed.starts_with("+ ")
+        || (trimmed.chars().next().is_some_and(|c| c.is_ascii_digit()) && trimmed.contains(". "))
+}
+
+/// Unwrap enclosing markdown bold/italic formatting.
+fn unwrap_markdown_emphasis(s: &str) -> &str {
+    let trimmed = s.trim();
+    if (trimmed.starts_with("**") && trimmed.ends_with("**") && trimmed.len() >= 4)
+        || (trimmed.starts_with("__") && trimmed.ends_with("__") && trimmed.len() >= 4)
+    {
+        &trimmed[2..trimmed.len() - 2]
+    } else if (trimmed.starts_with('*') && trimmed.ends_with('*') && trimmed.len() >= 2)
+        || (trimmed.starts_with('_') && trimmed.ends_with('_') && trimmed.len() >= 2)
+    {
+        &trimmed[1..trimmed.len() - 1]
+    } else {
+        trimmed
+    }
+}
+
+/// Check if a normalized line is an entire conversational filler phrase.
+fn is_full_filler_phrase(lower: &str) -> bool {
+    let trimmed = lower.trim().trim_end_matches(['.', '!', '?', ':']);
+
+    let affirmations = [
+        "sure",
+        "sure thing",
+        "certainly",
+        "of course",
+        "definitely",
+        "absolutely",
+        "okay",
+        "ok",
+        "alright",
+        "all right",
+        "great",
+        "awesome",
+        "no problem",
+        "happy to help",
+    ];
+
+    for aff in &affirmations {
+        if trimmed == *aff {
+            return true;
+        }
+    }
+
+    let promise_starts = [
+        "i will help you with",
+        "i'll help you with",
+        "i can help you with",
+        "i can help with",
+        "i'd be happy to help",
+        "i would be happy to help",
+        "i am happy to help",
+        "i'm happy to help",
+        "i will assist you with",
+        "i can assist you with",
+        "i can assist with",
+        "i'd be glad to help",
+        "i'll be glad to help",
+        "let me help you with",
+        "let's get started",
+    ];
+
+    for start in &promise_starts {
+        if trimmed.starts_with(start) {
+            return true;
+        }
+    }
+
+    let leadin_exact = ["summary", "summary of changes", "summary of the changes"];
+
+    for exact in &leadin_exact {
+        if trimmed == *exact {
+            return true;
+        }
+    }
+
+    let leadin_starts = [
+        "here is a summary",
+        "here's a summary",
+        "here is the summary",
+        "here's the summary",
+        "here is a breakdown",
+        "here's a breakdown",
+        "here are the changes",
+        "here are the updates",
+        "here's what changed",
+        "here is what changed",
+        "here's what i did",
+        "here is what i did",
+        "here is what was done",
+        "here's what was done",
+        "here is what i have done",
+        "here's what i've done",
+        "below is a summary",
+        "below is the summary",
+        "below are the changes",
+        "below are the updates",
+        "the following changes were made",
+        "the following changes have been made",
+        "the following is a summary",
+        "the following is a list of changes",
+    ];
+
+    for start in &leadin_starts {
+        if trimmed.starts_with(start) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Strip leading conversational filler prefix from a line if present.
+fn strip_leading_filler_prefix(s: &str) -> Option<&str> {
+    let lower = s.to_ascii_lowercase();
+
+    let affirmative_prefixes = [
+        "sure thing!",
+        "sure thing,",
+        "sure thing.",
+        "sure!",
+        "sure,",
+        "sure.",
+        "certainly!",
+        "certainly,",
+        "certainly.",
+        "of course!",
+        "of course,",
+        "of course.",
+        "definitely!",
+        "definitely,",
+        "okay,",
+        "okay!",
+        "ok,",
+        "ok!",
+        "alright,",
+        "alright!",
+        "all right,",
+        "all right!",
+        "great!",
+        "awesome!",
+        "no problem!",
+    ];
+
+    for prefix in &affirmative_prefixes {
+        if lower.starts_with(prefix) {
+            return Some(&s[prefix.len()..]);
+        }
+    }
+
+    let promise_prefixes = [
+        "i will help you with that.",
+        "i will help you with this.",
+        "i'll help you with that.",
+        "i'll help you with this.",
+        "i can help you with that.",
+        "i can help with that.",
+        "i'd be happy to help with that.",
+        "i would be happy to help with that.",
+    ];
+
+    for prefix in &promise_prefixes {
+        if lower.starts_with(prefix) {
+            return Some(&s[prefix.len()..]);
+        }
+    }
+
+    let leadin_prefixes = [
+        "here is a summary of the changes:",
+        "here's a summary of the changes:",
+        "here is a summary of changes:",
+        "here's a summary of changes:",
+        "here is a summary of the updates:",
+        "here's a summary of the updates:",
+        "here is a summary of what was done:",
+        "here's a summary of what was done:",
+        "here is a summary of what changed:",
+        "here's a summary of what changed:",
+        "here is a summary of what i did:",
+        "here's what i did:",
+        "here is what i did:",
+        "here is what was done:",
+        "here's what was done:",
+        "here's what changed:",
+        "here is what changed:",
+        "here are the changes:",
+        "here are the updates:",
+        "here is the summary:",
+        "here's the summary:",
+        "here is a summary:",
+        "here's a summary:",
+        "here is a breakdown of the changes:",
+        "here's a breakdown of the changes:",
+        "here is a breakdown:",
+        "here's a breakdown:",
+        "below is a summary of the changes:",
+        "below is a summary of changes:",
+        "below is a summary:",
+        "below is the summary:",
+        "below are the changes:",
+        "below are the updates:",
+        "the following changes were made:",
+        "the following changes have been made:",
+        "the following is a summary of the changes:",
+        "the following is a summary of changes:",
+        "the following is a summary:",
+        "summary of changes:",
+        "summary of the changes:",
+        "summary:",
+    ];
+
+    for prefix in &leadin_prefixes {
+        if lower.starts_with(prefix) {
+            return Some(&s[prefix.len()..]);
+        }
+    }
+
+    None
+}
+
+/// Clean conversational filler from a single line, stripping prefixes iteratively.
+fn clean_leading_filler_from_line(line: &str) -> String {
+    let mut current = line.trim();
+    let mut stripped_any = false;
+
+    loop {
+        let unwrapped = unwrap_markdown_emphasis(current);
+        let lower = unwrapped.to_ascii_lowercase();
+
+        if is_full_filler_phrase(&lower) {
+            return String::new();
+        }
+
+        if let Some(rest) = strip_leading_filler_prefix(current) {
+            let next_trimmed = rest.trim_start();
+            if next_trimmed == current {
+                break;
+            }
+            current = next_trimmed;
+            stripped_any = true;
+        } else {
+            break;
+        }
+    }
+
+    if current.is_empty() {
+        return String::new();
+    }
+
+    if stripped_any {
+        let mut chars = current.chars();
+        if let Some(first) = chars.next()
+            && first.is_ascii_lowercase()
+        {
+            let upper = first.to_ascii_uppercase();
+            let mut capitalized = String::with_capacity(current.len());
+            capitalized.push(upper);
+            capitalized.push_str(chars.as_str());
+            return capitalized;
+        }
+    }
+
+    current.to_string()
+}
+
+/// Check if a line is trailing conversational filler (polite sign-off, offer for help).
+fn is_trailing_filler_line(line: &str) -> bool {
+    let trimmed = line.trim().trim_end_matches(['.', '!', '?', '\n', '\r']);
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let lower = trimmed.to_ascii_lowercase();
+
+    let trailing_patterns = [
+        "let me know if you need anything else",
+        "let me know if you have any questions",
+        "let me know if you need any further",
+        "let me know if you'd like me to",
+        "let me know if you would like me to",
+        "let me know if you want me to",
+        "let me know if there's anything else",
+        "let me know if there is anything else",
+        "let me know what you think",
+        "please let me know if you have any questions",
+        "please let me know if you need anything else",
+        "please let me know if you need any further",
+        "please let me know if you'd like",
+        "feel free to ask if you have any questions",
+        "feel free to reach out",
+        "feel free to let me know",
+        "hope this helps",
+        "hope that helps",
+        "does this look good to you",
+        "does this look good",
+        "if you have any questions, feel free",
+        "if you have any questions, let me know",
+        "if you need any further assistance",
+        "if you need any more changes, please let me know",
+    ];
+
+    for pattern in &trailing_patterns {
+        if lower.contains(pattern) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Collapse runs of 3 or more newlines to at most 2 newlines (\n\n).
+fn collapse_blank_lines(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut consecutive_newlines = 0;
+
+    for c in text.chars() {
+        if c == '\n' {
+            consecutive_newlines += 1;
+            if consecutive_newlines <= 2 {
+                result.push('\n');
+            }
+        } else {
+            consecutive_newlines = 0;
+            result.push(c);
+        }
+    }
+
+    result.trim().to_string()
+}
+
+/// Strip conversational filler from assistant responses (leading greetings, affirmations,
+/// promises, summary lead-ins, and trailing polite sign-offs).
+pub fn strip_conversational_filler(text: &str) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut start = 0;
+    let mut modified_first_line: Option<String> = None;
+
+    while start < lines.len() {
+        let line = lines[start];
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            start += 1;
+            continue;
+        }
+
+        if is_structural_line(trimmed) {
+            break;
+        }
+
+        let cleaned = clean_leading_filler_from_line(trimmed);
+        if cleaned.is_empty() {
+            start += 1;
+            continue;
+        } else if cleaned != trimmed {
+            modified_first_line = Some(cleaned);
+            break;
+        } else {
+            break;
+        }
+    }
+
+    let mut end = lines.len();
+    while end > start {
+        let line = lines[end - 1];
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() {
+            end -= 1;
+            continue;
+        }
+
+        if is_structural_line(trimmed) {
+            break;
+        }
+
+        if is_trailing_filler_line(trimmed) {
+            end -= 1;
+            continue;
+        } else {
+            break;
+        }
+    }
+
+    if start >= end {
+        return String::new();
+    }
+
+    let mut result_lines = Vec::new();
+    for (idx, line) in lines[start..end].iter().enumerate() {
+        if idx == 0
+            && let Some(ref first) = modified_first_line
+        {
+            result_lines.push(first.as_str());
+        } else {
+            result_lines.push(*line);
+        }
+    }
+
+    let joined = result_lines.join("\n");
+    collapse_blank_lines(&joined)
+}
+
+/// Sanitize chat body by:
+/// 1. Stripping ANSI escape sequences and carriage return artifacts.
+/// 2. Stripping tool call and thought residue (XML tags, code fences, CLI/ReAct markers).
+/// 3. Stripping conversational filler (greetings, promises, lead-ins, sign-offs).
+/// 4. Sanitizing user file URLs (`file:///Users/...` -> `~/...`).
+/// 5. Sanitizing repository paths (`file:///.../repo/` -> `./`).
+pub fn sanitize_chat_body(text: &str, repo_root: Option<&Path>) -> String {
+    let no_ansi = strip_ansi_escapes(text);
+    let no_tools = strip_tool_residue(&no_ansi);
+    let no_filler = strip_conversational_filler(&no_tools);
+    let no_urls = sanitize_file_urls(&no_filler);
+    sanitize_current_path(&no_urls, repo_root)
+}
+
 /// Path to Antigravity's brain directory storing conversation transcripts.
 pub fn antigravity_brain_dir() -> Option<PathBuf> {
     if let Ok(dir) = std::env::var(ANTIGRAVITY_BRAIN_ENV) {
@@ -635,11 +1394,13 @@ pub fn parse_antigravity_reader<R: BufRead>(
         }
     }
 
-    let body = last_message.ok_or_else(|| {
+    let raw_body = last_message.ok_or_else(|| {
         format!(
             "Antigravity conversation `{conversation_id}` has no assistant response text to copy"
         )
     })?;
+
+    let sanitized_body = sanitize_chat_body(&raw_body, repo_root);
 
     let (subject, subject_source) = match latest_prompt {
         Some(prompt) => {
@@ -650,7 +1411,7 @@ pub fn parse_antigravity_reader<R: BufRead>(
             )
         }
         None => {
-            let line = first_line(&body).unwrap_or_else(|| body.clone());
+            let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
             let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
             (
                 truncate(&sanitized, FALLBACK_SUBJECT_MAX),
@@ -658,8 +1419,6 @@ pub fn parse_antigravity_reader<R: BufRead>(
             )
         }
     };
-
-    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
 
     Ok(ChatMessage {
         session_id: conversation_id.to_string(),
@@ -977,9 +1736,11 @@ pub fn parse_claude_reader<R: BufRead>(
         }
     }
 
-    let body = last_message.ok_or_else(|| {
+    let raw_body = last_message.ok_or_else(|| {
         format!("Claude Code session `{session_id}` has no assistant response text to copy")
     })?;
+
+    let sanitized_body = sanitize_chat_body(&raw_body, repo_root);
 
     let (subject, subject_source) = match latest_prompt {
         Some(prompt) => {
@@ -990,7 +1751,7 @@ pub fn parse_claude_reader<R: BufRead>(
             )
         }
         None => {
-            let line = first_line(&body).unwrap_or_else(|| body.clone());
+            let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
             let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
             (
                 truncate(&sanitized, FALLBACK_SUBJECT_MAX),
@@ -998,8 +1759,6 @@ pub fn parse_claude_reader<R: BufRead>(
             )
         }
     };
-
-    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
 
     Ok(ChatMessage {
         session_id: session_id.to_string(),
@@ -1469,9 +2228,11 @@ pub fn parse_codex_reader<R: BufRead>(
         session_id
     };
 
-    let body = last_message.ok_or_else(|| {
+    let raw_body = last_message.ok_or_else(|| {
         format!("Codex session `{final_session_id}` has no assistant response text to copy")
     })?;
+
+    let sanitized_body = sanitize_chat_body(&raw_body, repo_root);
 
     let (subject, subject_source) = if let Some(title) = thread_name
         .map(str::trim)
@@ -1486,15 +2247,13 @@ pub fn parse_codex_reader<R: BufRead>(
             SubjectSource::LatestPrompt,
         )
     } else {
-        let line = first_line(&body).unwrap_or_else(|| body.clone());
+        let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
         let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
         (
             truncate(&sanitized, FALLBACK_SUBJECT_MAX),
             SubjectSource::LastMessage,
         )
     };
-
-    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
 
     Ok(ChatMessage {
         session_id: final_session_id.to_string(),
@@ -2111,9 +2870,11 @@ pub fn parse_devin_reader<R: BufRead>(
             session_id
         };
 
-    let body = last_message.ok_or_else(|| {
+    let raw_body = last_message.ok_or_else(|| {
         format!("Devin session `{final_session_id}` has no assistant response text to copy")
     })?;
+
+    let sanitized_body = sanitize_chat_body(&raw_body, repo_root);
 
     let (subject, subject_source) = if let Some(t) = title {
         let sanitized = sanitize_current_path(&sanitize_file_urls(&t), repo_root);
@@ -2125,15 +2886,13 @@ pub fn parse_devin_reader<R: BufRead>(
             SubjectSource::LatestPrompt,
         )
     } else {
-        let line = first_line(&body).unwrap_or_else(|| body.clone());
+        let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
         let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
         (
             truncate(&sanitized, FALLBACK_SUBJECT_MAX),
             SubjectSource::LastMessage,
         )
     };
-
-    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
 
     Ok(ChatMessage {
         session_id: final_session_id.to_string(),
@@ -2196,7 +2955,7 @@ pub fn load(
         verbose,
     )?;
     chat.subject = sanitize_current_path(&chat.subject, repo_root);
-    chat.body = sanitize_current_path(&chat.body, repo_root);
+    chat.body = sanitize_chat_body(&chat.body, repo_root);
     Ok(chat)
 }
 
@@ -2620,11 +3379,13 @@ pub fn parse_with_root(
         }
     }
 
-    let body = last_message.ok_or_else(|| {
+    let raw_body = last_message.ok_or_else(|| {
         format!(
             "OpenCode session `{session_id}` has no assistant text or completed compaction summary to copy"
         )
     })?;
+
+    let sanitized_body = sanitize_chat_body(&raw_body, repo_root);
 
     let (subject, subject_source) = match title {
         Some(title) => {
@@ -2640,7 +3401,7 @@ pub fn parse_with_root(
                 )
             }
             None => {
-                let line = first_line(&body).unwrap_or_else(|| body.clone());
+                let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
                 let sanitized = sanitize_current_path(&line, repo_root);
                 (
                     truncate(&sanitized, FALLBACK_SUBJECT_MAX),
@@ -2649,8 +3410,6 @@ pub fn parse_with_root(
             }
         },
     };
-
-    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
 
     Ok(ChatMessage {
         session_id: session_id.to_string(),
@@ -3532,5 +4291,74 @@ Router has been refactored to use async handlers across all routes.
         let err = parse_devin(transcript.as_bytes(), "empty-devin").unwrap_err();
         assert!(err.contains("no assistant response text"));
         assert!(err.contains("empty-devin"));
+    }
+
+    #[test]
+    fn strips_ansi_escapes_from_text() {
+        assert_eq!(strip_ansi_escapes("plain text"), "plain text");
+        assert_eq!(
+            strip_ansi_escapes("\x1b[32mSuccess!\x1b[0m \x1b[1;31mError\x1b[0m"),
+            "Success! Error"
+        );
+        assert_eq!(
+            strip_ansi_escapes("\x1b]0;terminal title\x07Hello world"),
+            "Hello world"
+        );
+        assert_eq!(
+            strip_ansi_escapes("\x1b]0;terminal title\x1b\\Hello world"),
+            "Hello world"
+        );
+        assert_eq!(
+            strip_ansi_escapes("\x1b[2K\rDone!\r\nNext line"),
+            "Done!\nNext line"
+        );
+    }
+
+    #[test]
+    fn strips_tool_residue_xml_blocks() {
+        let input = "Start\n<tool_call>\n{\"name\": \"run_cmd\"}\n</tool_call>\nMiddle\n<thought>thinking...</thought>\nEnd";
+        let cleaned = strip_tool_residue(input);
+        assert_eq!(cleaned, "Start\n\nMiddle\n\nEnd");
+    }
+
+    #[test]
+    fn strips_tool_residue_code_fences_and_cli_markers() {
+        let input = "Fixed the bug.\n\n```tool_call\n{\"tool\": \"shell\"}\n```\n\n[Tool Output: tests passed]\n\nAll tests pass.";
+        let cleaned = strip_tool_residue(input);
+        assert_eq!(cleaned, "Fixed the bug.\n\nAll tests pass.");
+    }
+
+    #[test]
+    fn strips_conversational_filler_greetings_and_leadins() {
+        let input = "Sure! I will help you with that.\n\nHere is a summary:\n- Added feature A\n- Fixed bug B\n\nHope this helps! Let me know if you need anything else.";
+        let cleaned = strip_conversational_filler(input);
+        assert_eq!(cleaned, "- Added feature A\n- Fixed bug B");
+    }
+
+    #[test]
+    fn strips_conversational_prefix_from_single_sentence() {
+        let input = "Sure! I've updated the implementation to support custom scopes.";
+        let cleaned = strip_conversational_filler(input);
+        assert_eq!(
+            cleaned,
+            "I've updated the implementation to support custom scopes."
+        );
+    }
+
+    #[test]
+    fn preserves_structural_headings_and_lists() {
+        let input = "### Summary of Changes\n\n1. Added unit test\n2. Updated documentation";
+        let cleaned = strip_conversational_filler(input);
+        assert_eq!(
+            cleaned,
+            "### Summary of Changes\n\n1. Added unit test\n2. Updated documentation"
+        );
+    }
+
+    #[test]
+    fn full_sanitize_chat_body_integration() {
+        let input = "\x1b[32mSure! I will help you with this task.\x1b[0m\n\n<tool_call>\n{\"name\": \"test\"}\n</tool_call>\n\nHere is a summary of the changes:\n- Fixed edge cases in parser\n- Added test suite\n\nLet me know if you have any questions!";
+        let cleaned = sanitize_chat_body(input, None);
+        assert_eq!(cleaned, "- Fixed edge cases in parser\n- Added test suite");
     }
 }
