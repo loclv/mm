@@ -78,6 +78,15 @@ pub struct ChatMessage {
 impl ChatMessage {
     /// Render the final message, optionally replacing the subject.
     pub fn message(&self, subject_override: Option<&str>) -> String {
+        self.message_with_root(subject_override, None)
+    }
+
+    /// Format message and sanitize current repository paths using `repo_root`.
+    pub fn message_with_root(
+        &self,
+        subject_override: Option<&str>,
+        repo_root: Option<&Path>,
+    ) -> String {
         let subject = subject_override
             .map(str::trim)
             .filter(|value| !value.is_empty())
@@ -89,7 +98,7 @@ impl ChatMessage {
             format!("{subject}\n\n{}", self.body)
         };
 
-        sanitize_current_path(&msg, None)
+        sanitize_current_path(&msg, repo_root)
     }
 }
 
@@ -98,7 +107,21 @@ fn is_path_delimiter(c: char) -> bool {
     c.is_whitespace()
         || matches!(
             c,
-            '"' | '\'' | '`' | ')' | ']' | '>' | '}' | '<' | '\\' | ';' | ','
+            '"' | '\''
+                | '`'
+                | ')'
+                | ']'
+                | '}'
+                | '>'
+                | '<'
+                | '\\'
+                | ';'
+                | ','
+                | ':'
+                | '?'
+                | '!'
+                | '|'
+                | '*'
         )
 }
 
@@ -246,7 +269,15 @@ fn replace_path_target(mut text: String, target: &str, replacement: &str) -> Str
             true
         } else {
             let next_char = text[after..].chars().next().unwrap();
-            is_path_delimiter(next_char)
+            if is_path_delimiter(next_char) {
+                true
+            } else if next_char == '.' {
+                let after_dot = after + next_char.len_utf8();
+                after_dot == text.len()
+                    || !text[after_dot..].chars().next().unwrap().is_alphanumeric()
+            } else {
+                false
+            }
         };
 
         if is_boundary {
@@ -286,6 +317,30 @@ pub fn sanitize_current_path_with_home(
         if !dirs.contains(&alt) {
             dirs.push(alt);
         }
+    }
+
+    // If dir is inside a git repository, also add the repository root to dirs
+    let mut check_parent = dir.as_path();
+    while let Some(parent) = check_parent.parent() {
+        if parent.join(".git").exists() {
+            if !dirs.contains(&parent.to_path_buf()) {
+                dirs.push(parent.to_path_buf());
+                if let Ok(canonical) = fs::canonicalize(parent)
+                    && !dirs.contains(&canonical)
+                {
+                    dirs.push(canonical);
+                }
+                let p_str = parent.to_string_lossy();
+                if let Some(stripped) = p_str.strip_prefix("/private/") {
+                    let alt = PathBuf::from(format!("/{stripped}"));
+                    if !dirs.contains(&alt) {
+                        dirs.push(alt);
+                    }
+                }
+            }
+            break;
+        }
+        check_parent = parent;
     }
 
     let mut home_paths = Vec::new();
@@ -330,6 +385,10 @@ pub fn sanitize_current_path_with_home(
                 if !rel_trimmed.is_empty() {
                     let home_rel = format!("~/{rel_trimmed}");
                     result = replace_path_target(result, &home_rel, "./");
+                    let file_home = format!("file://{home_rel}");
+                    result = replace_path_target(result, &file_home, "./");
+                    let file_home_slash = format!("file:///{home_rel}");
+                    result = replace_path_target(result, &file_home_slash, "./");
                 }
             }
         }
@@ -337,6 +396,9 @@ pub fn sanitize_current_path_with_home(
         // 4. raw <abs>
         result = replace_path_target(result, abs_trimmed, "./");
     }
+
+    result = result.replace("file:///./", "./");
+    result = result.replace("file://./", "./");
 
     result
 }
@@ -597,10 +659,12 @@ pub fn parse_antigravity_reader<R: BufRead>(
         }
     };
 
+    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
+
     Ok(ChatMessage {
         session_id: conversation_id.to_string(),
         subject: sanitize_file_urls(&subject),
-        body: sanitize_file_urls(&body),
+        body: sanitized_body,
         subject_source,
     })
 }
@@ -935,10 +999,12 @@ pub fn parse_claude_reader<R: BufRead>(
         }
     };
 
+    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
+
     Ok(ChatMessage {
         session_id: session_id.to_string(),
         subject: sanitize_file_urls(&subject),
-        body: sanitize_file_urls(&body),
+        body: sanitized_body,
         subject_source,
     })
 }
@@ -1428,10 +1494,12 @@ pub fn parse_codex_reader<R: BufRead>(
         )
     };
 
+    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
+
     Ok(ChatMessage {
         session_id: final_session_id.to_string(),
         subject: sanitize_file_urls(&subject),
-        body: sanitize_file_urls(&body),
+        body: sanitized_body,
         subject_source,
     })
 }
@@ -2065,10 +2133,12 @@ pub fn parse_devin_reader<R: BufRead>(
         )
     };
 
+    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
+
     Ok(ChatMessage {
         session_id: final_session_id.to_string(),
         subject: sanitize_file_urls(&subject),
-        body: sanitize_file_urls(&body),
+        body: sanitized_body,
         subject_source,
     })
 }
@@ -2580,10 +2650,12 @@ pub fn parse_with_root(
         },
     };
 
+    let sanitized_body = sanitize_current_path(&sanitize_file_urls(&body), repo_root);
+
     Ok(ChatMessage {
         session_id: session_id.to_string(),
         subject: sanitize_file_urls(&subject),
-        body: sanitize_file_urls(&body),
+        body: sanitized_body,
         subject_source,
     })
 }
@@ -3283,6 +3355,60 @@ mod tests {
                 Some(home)
             ),
             "Look at ./README.md"
+        );
+
+        // Quoted path like in user requests
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "if current path like \"~/w/auto-commit/rust/\" is current path",
+                Some(repo),
+                Some(home)
+            ),
+            "if current path like \"./\" is current path"
+        );
+
+        // Raw directory without trailing slash
+        assert_eq!(
+            sanitize_current_path_with_home("In ~/w/auto-commit/rust", Some(repo), Some(home)),
+            "In ./"
+        );
+
+        // Colon delimiter
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "At ~/w/auto-commit/rust: line 42",
+                Some(repo),
+                Some(home)
+            ),
+            "At ./: line 42"
+        );
+
+        // Markdown bold
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "In **~/w/auto-commit/rust** directory",
+                Some(repo),
+                Some(home)
+            ),
+            "In **./** directory"
+        );
+
+        // file:// with tilde
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "Look at file://~/w/auto-commit/rust/src/main.rs",
+                Some(repo),
+                Some(home)
+            ),
+            "Look at ./src/main.rs"
+        );
+        assert_eq!(
+            sanitize_current_path_with_home(
+                "Look at file:///~/w/auto-commit/rust/src/main.rs",
+                Some(repo),
+                Some(home)
+            ),
+            "Look at ./src/main.rs"
         );
     }
 

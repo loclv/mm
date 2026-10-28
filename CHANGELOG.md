@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 2026-10-28
+
+### Changes
+
+- Enhanced current repository path sanitization in copied AI Agent chat logs to automatically replace occurrences of the current path (such as `~/w/auto-commit/rust/`, raw paths, quoted paths, delimiter-bounded paths, or file URLs) with `./`, including when executing from subdirectories and across all chat providers.
+
 ## 2026-10-27
 
 ### Changes

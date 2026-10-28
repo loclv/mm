@@ -323,7 +323,7 @@ pub fn execute(options: &Options) -> Result<(), String> {
     let message = if options.chat {
         let chat_result = chat::load(
             options.chat_session.as_deref(),
-            Some(&directory),
+            Some(git.root()),
             options.antigravity,
             options.claude,
             options.codex,
@@ -352,7 +352,7 @@ pub fn execute(options: &Options) -> Result<(), String> {
                 } else {
                     format!("{formatted_header}\n\n{}", chat.body)
                 };
-                let msg = chat::sanitize_current_path(&msg, Some(&directory));
+                let msg = chat::sanitize_current_path(&msg, Some(git.root()));
 
                 if msg.is_empty() {
                     if options.verbose {
