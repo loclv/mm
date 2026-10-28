@@ -117,8 +117,3 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
 - Output contract: generated message on stdout, errors as `Error: ...` on stderr,
   verbose diagnostics as `[mm] ...` on stderr. `--print` stdout is asserted
   exactly by integration tests.
-
-## Dependencies
-
-Only `serde_json` and `serde_norway` at runtime. Treat new dependencies as a
-deliberate design decision, not a convenience.
