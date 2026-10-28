@@ -84,8 +84,6 @@ Streamline command-line ergonomics and developer workflows.
   - Provide an interactive prompt showing the proposed subject, body, and changed file list with `[Y/n/e]` (Commit / Cancel / Edit).
 - [ ] Quick Amend (`--amend`) `[Priority: Medium]`
   - Allow amending the previous commit with newly staged/unstaged changes and an updated message without manual `git commit --amend`.
-- [ ] Git Hook Generation (`mm hook install`) `[Priority: Low]`
-  - Helper command to install `prepare-commit-msg` or `commit-msg` hooks for projects using git hooks.
 - [x] Shell Auto-Completions `[Priority: Low]`
   - Generate completion scripts for `bash`, `zsh`, and `fish` via `mm --completions <shell>`.
 
