@@ -78,6 +78,7 @@ mm # generate and commit
 
 | Option | Meaning |
 |---|---|
+| `--completions <SHELL>` | Print a completion script for `bash`, `zsh`, or `fish`, then exit |
 | `-a`, `--add` | Stage all changes, including untracked files, then commit |
 | `-e`, `--edit` | Open the generated message in Git's editor before committing |
 | `-p`, `--print` | Print the message and exit; never commit |
@@ -100,6 +101,36 @@ mm # generate and commit
 | `-n`, `--no-edit` | Compatibility flag; editing is already off by default |
 | `-h`, `--help` | Show help and exit |
 | `-v`, `-V`, `--version` | Show the version and exit |
+
+## Shell completions
+
+`mm --completions <shell>` prints a completion script to stdout and exits. It
+works outside a Git repository and does not change anything on disk, so you can
+redirect the output wherever your shell loads completions from:
+
+```sh
+# bash (macOS Homebrew or Linux)
+mm --completions bash > /etc/bash_completion.d/mm
+mm --completions bash > ~/.local/share/bash-completion/completions/mm
+
+# zsh
+mkdir -p ~/.zfunc
+mm --completions zsh > ~/.zfunc/_mm
+# then add `fpath+=~/.zfunc` before `compinit` in ~/.zshrc
+
+# fish
+mm --completions fish > ~/.config/fish/completions/mm.fish
+```
+
+For zsh with Oh My Zsh, the script also works as a plugin: save it as
+`$ZSH_CUSTOM/plugins/mm/mm.plugin.zsh` and add `mm` to `plugins`.
+
+An unsupported shell name is an error:
+
+```sh
+mm --completions nushell
+# Error: unsupported shell `nushell` (expected bash, zsh, fish)
+```
 
 ## How changes are selected
 
@@ -242,6 +273,7 @@ mm --devin-session sess-123 # commit with a specific Devin session
 mm --chat-session ses_123 --print # preview another OpenCode session
 mm -m 'JIRA-1 fix: keep this' # keep an existing prefix/description
 mm --verbose --print # explain what mm is doing on stderr
+mm --completions fish > ~/.config/fish/completions/mm.fish # install fish completions
 ```
 
 ## Output and exit status
@@ -249,8 +281,8 @@ mm --verbose --print # explain what mm is doing on stderr
 - The generated message goes to stdout.
 - Errors go to stderr as `Error: ...`.
 - Verbose diagnostics go to stderr with an `[mm]` prefix.
-- Exit status is `0` on success (including `--help`, `--version`, and
-  `--print`) and `1` on failure.
+- Exit status is `0` on success (including `--help`, `--version`,
+  `--completions`, and `--print`) and `1` on failure.
 
 ## Troubleshooting
 

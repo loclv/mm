@@ -68,6 +68,7 @@ mm --claude # Copy the latest Claude Code log commit message
 mm --codex # Copy the latest Codex log commit message
 mm --devin # Copy the latest Devin / Cascade log commit message
 mm -m 'JIRA-1: fix' # Keep an existing prefix/description (or override a chat subject)
+mm --completions zsh # Print shell completions (bash, zsh, or fish)
 ```
 
 Run `mm --help` for the full option list. See [docs/usage.md](docs/usage.md)
@@ -231,6 +232,7 @@ TypeScript files:
 | `chat.rs` | New: copies a title and last message from an OpenCode session |
 | `commitlint.rs` | New: finds and loads the project's commitlint configuration |
 | `policy.rs` | New: applies commitlint rules to a generated message |
+| `completions.rs` | New: generates bash, zsh, and fish completion scripts |
 
 ## Differences from `gacm`
 

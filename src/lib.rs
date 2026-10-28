@@ -10,11 +10,13 @@
 //! - [`generate`] assembles the final commit message.
 //! - [`config`] reads the optional `mm.json` project settings.
 //! - [`chat`] copies a title and last assistant message from an OpenCode session.
+//! - [`completions`] provides shell completion scripts for `bash`, `zsh`, and `fish`.
 //! - [`cli`] implements the `mm` command-line interface.
 
 pub mod chat;
 pub mod cli;
 pub mod commitlint;
+pub mod completions;
 pub mod config;
 pub mod conventional;
 pub mod generate;

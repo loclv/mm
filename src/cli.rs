@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use crate::chat;
 use crate::commitlint;
+use crate::completions::Shell;
 use crate::config;
 use crate::constants::NO_LINES_MSG;
 use crate::generate::{MessageFormat, generate_msg_with_policy};
@@ -19,6 +20,7 @@ use crate::policy::Policy;
 pub enum Command {
     Help,
     Version,
+    Completions(Shell),
     Run(Options),
 }
 
@@ -83,6 +85,7 @@ session, --agy to copy from Antigravity, --claude to copy from Claude Code, --co
 to copy from Codex, or --devin to copy from Devin / Codeium.
 
 Options:
+      --completions <SHELL> # Print a completion script for bash, zsh, or fish
   -a, --add # Stage all changes, including untracked files, first
   -e, --edit # Open the commit message in an editor before committing
   -p, --print # Print the generated message and exit without committing
@@ -116,6 +119,7 @@ Examples:
   mm --codex --print # Preview the message copied from Codex's last log
   mm --devin --print # Preview the message copied from Devin's last log
   mm -m 'JIRA-1: fix' # Keep the existing prefix/description
+  mm --completions zsh > ~/.zfunc/_mm # Install zsh completions
 ";
 
 /// Parse arguments into a command.
@@ -129,6 +133,14 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
         match arg {
             "-h" | "--help" => return Ok(Command::Help),
             "-v" | "-V" | "--version" => return Ok(Command::Version),
+            "--completions" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| format!("`{arg}` requires a value"))?;
+
+                return parse_shell(value).map(Command::Completions);
+            }
             "-a" | "--add" | "--all" => options.add = true,
             "-e" | "--edit" => options.edit = true,
             "-n" | "--no-edit" => options.edit = false,
@@ -213,6 +225,9 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
                     .ok_or_else(|| format!("`{arg}` requires a value"))?;
                 options.message = Some(value.clone());
             }
+            _ if arg.starts_with("--completions=") => {
+                return parse_shell(&arg["--completions=".len()..]).map(Command::Completions);
+            }
             _ if arg.starts_with("--message=") => {
                 options.message = Some(arg["--message=".len()..].to_string());
             }
@@ -262,6 +277,16 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
     Ok(Command::Run(options))
 }
 
+/// Parse the shell name accepted by `--completions`.
+fn parse_shell(value: &str) -> Result<Shell, String> {
+    Shell::parse(value).ok_or_else(|| {
+        format!(
+            "unsupported shell `{value}` (expected {})",
+            Shell::NAMES.join(", ")
+        )
+    })
+}
+
 /// Run the CLI and print any requested output.
 ///
 /// Errors are returned as messages for `main` to print. This keeps the function
@@ -274,6 +299,10 @@ pub fn run(args: &[String]) -> Result<(), String> {
         }
         Command::Version => {
             println!("mm {}", env!("CARGO_PKG_VERSION"));
+            Ok(())
+        }
+        Command::Completions(shell) => {
+            print!("{}", shell.script());
             Ok(())
         }
         Command::Run(options) => execute(&options),
@@ -723,6 +752,28 @@ mod tests {
     fn rejects_unknown_arguments() {
         assert!(parse_args(&args(&["--nope"])).is_err());
         assert!(parse_args(&args(&["commit"])).is_err());
+    }
+
+    #[test]
+    fn parses_completions() {
+        let by_space = parse_args(&args(&["--completions", "bash"])).unwrap();
+        let by_equals = parse_args(&args(&["--completions=bash"])).unwrap();
+        let zsh = parse_args(&args(&["--completions", "zsh"])).unwrap();
+        let fish = parse_args(&args(&["--completions=fish"])).unwrap();
+
+        assert_eq!(by_space, Command::Completions(Shell::Bash));
+        assert_eq!(by_equals, by_space);
+        assert_eq!(zsh, Command::Completions(Shell::Zsh));
+        assert_eq!(fish, Command::Completions(Shell::Fish));
+    }
+
+    #[test]
+    fn rejects_unsupported_completion_shells() {
+        assert!(parse_args(&args(&["--completions"])).is_err());
+
+        let error = parse_args(&args(&["--completions", "nushell"])).unwrap_err();
+        assert!(error.contains("unsupported shell `nushell`"), "{error}");
+        assert!(error.contains("bash, zsh, fish"), "{error}");
     }
 
     #[test]

@@ -25,9 +25,6 @@ Expand and refine transcript parsing for developer AI environments.
   - [x] Strip conversational filler from assistant responses (e.g. "Sure! I will help you with...", "Here is a summary:").
   - [x] Strip tool call residue and ANSI escape sequences if present.
   - [ ] Support `--max-body-lines <N>` to prevent bloated commit logs on massive multi-file refactor outputs.
-- [ ] Co-Author & Agent Git Trailers `[Priority: Medium]`
-  - Automatically append configurable trailer in chat mode (e.g. `Co-authored-by: Antigravity <agent@antigravity.google>`).
-  - Flag `--co-author` or `"trailers": [...]` setting in `mm.json`.
 
 ## 2. Conventional Commit Heuristics & Scopes
 
@@ -89,7 +86,7 @@ Streamline command-line ergonomics and developer workflows.
   - Allow amending the previous commit with newly staged/unstaged changes and an updated message without manual `git commit --amend`.
 - [ ] Git Hook Generation (`mm hook install`) `[Priority: Low]`
   - Helper command to install `prepare-commit-msg` or `commit-msg` hooks for projects using git hooks.
-- [ ] Shell Auto-Completions `[Priority: Low]`
+- [x] Shell Auto-Completions `[Priority: Low]`
   - Generate completion scripts for `bash`, `zsh`, and `fish` via `mm --completions <shell>`.
 
 ## 5. Performance, Infrastructure & Distribution

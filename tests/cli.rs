@@ -303,6 +303,69 @@ fn shows_help() {
 }
 
 #[test]
+fn prints_shell_completions_outside_a_repository() {
+    let path = std::env::temp_dir().join(format!("mm-test-completions-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&path);
+    fs::create_dir_all(&path).unwrap();
+
+    for (shell, marker) in [
+        ("bash", "complete -F _mm mm"),
+        ("zsh", "#compdef mm"),
+        ("fish", "complete -c mm"),
+    ] {
+        let output = Command::new(env!("CARGO_BIN_EXE_mm"))
+            .args(["--completions", shell])
+            .current_dir(&path)
+            .output()
+            .expect("run mm");
+
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).is_empty(), "{}", stderr(&output));
+        assert!(
+            stdout(&output).contains(marker),
+            "{shell}: {}",
+            stdout(&output)
+        );
+        assert!(stdout(&output).contains("--completions"));
+    }
+
+    let by_equals = Command::new(env!("CARGO_BIN_EXE_mm"))
+        .arg("--completions=zsh")
+        .current_dir(&path)
+        .output()
+        .expect("run mm");
+
+    let _ = fs::remove_dir_all(&path);
+
+    assert!(by_equals.status.success(), "{}", stderr(&by_equals));
+    assert!(stdout(&by_equals).starts_with("#compdef mm"));
+}
+
+#[test]
+fn rejects_unknown_completion_shells() {
+    let missing_value = Command::new(env!("CARGO_BIN_EXE_mm"))
+        .arg("--completions")
+        .output()
+        .expect("run mm");
+
+    let unknown = Command::new(env!("CARGO_BIN_EXE_mm"))
+        .args(["--completions", "nushell"])
+        .output()
+        .expect("run mm");
+
+    assert!(!missing_value.status.success());
+    assert!(stderr(&missing_value).contains("requires a value"));
+
+    assert!(!unknown.status.success());
+    assert!(
+        stderr(&unknown).contains("Error: unsupported shell `nushell`"),
+        "{}",
+        stderr(&unknown)
+    );
+    assert!(stdout(&unknown).is_empty());
+}
+
+#[test]
 fn fails_outside_a_repository() {
     let path = std::env::temp_dir().join(format!("mm-test-not-a-repo-{}", std::process::id()));
     let _ = fs::remove_dir_all(&path);
