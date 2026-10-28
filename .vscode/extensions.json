@@ -1,6 +1,7 @@
 {
 	"recommendations": [
 		"biomejs.biome",
-		"rust-lang.rust-analyzer"
+		"rust-lang.rust-analyzer",
+		"loclv.agent-md-formatter"
 	]
 }
