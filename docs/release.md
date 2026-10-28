@@ -133,10 +133,13 @@ See [docs/packaging.md](file:///Users/a0/w/auto-commit/rust/docs/packaging.md) f
 If publishing to [crates.io](https://crates.io):
 
 1. Perform a dry-run publish first:
-   ```sh
-   cargo publish --dry-run
-   ```
+
+```sh
+cargo publish --dry-run
+```
+
 2. Publish:
-   ```sh
-   cargo publish
-   ```
+
+```sh
+cargo publish
+```
