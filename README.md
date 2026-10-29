@@ -10,9 +10,9 @@ mm
 By default there is no AI or network call. The message is built from the paths
 and change types that Git reports.
 If the project has a commitlint configuration, its type,
-scope and length rules are applied too. Inside OpenCode, Antigravity, Claude Code, Codex, or Devin / Codeium, `--chat`, `--agy`, `--claude`, `--codex`, or `--devin`
+scope and length rules are applied too. Inside OpenCode, Antigravity, Claude Code, Codex, Devin / Codeium, or Freebuff / Codebuff, `--chat`, `--agy`, `--claude`, `--codex`, `--devin`, or `--freebuff`
 can copy the session/prompt and last assistant message instead; see
-[Using an OpenCode, Antigravity, Claude Code, Codex, or Devin / Codeium chat](#using-an-opencode-antigravity-claude-code-codex-or-devin--codeium-chat).
+[Using an OpenCode, Antigravity, Claude Code, Codex, Devin / Codeium, or Freebuff / Codebuff chat](#using-an-opencode-antigravity-claude-code-codex-devin--codeium-or-freebuff--codebuff-chat).
 
 ## Problems
 
@@ -62,11 +62,12 @@ mm --print # Show the message without committing
 mm --add # Stage everything (including new files), then commit
 mm --edit # Open the editor before committing
 mm --staged # Use only staged changes
-mm --chat # Copy the current OpenCode, Antigravity, Claude Code, or Codex chat
+mm --chat # Copy the current OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff chat
 mm --agy # Copy the latest Antigravity log commit message
 mm --claude # Copy the latest Claude Code log commit message
 mm --codex # Copy the latest Codex log commit message
 mm --devin # Copy the latest Devin / Cascade log commit message
+mm --freebuff # Copy the latest Freebuff / Codebuff log commit message
 mm -m 'JIRA-1: fix' # Keep an existing prefix/description (or override a chat subject)
 mm --completions zsh # Print shell completions (bash, zsh, or fish)
 ```
@@ -102,17 +103,18 @@ when running without any staged changes. To disable this, set `"autoAdd": false`
 }
 ```
 
-### Using an OpenCode, Antigravity, Claude Code, Codex, or Devin / Codeium chat
+### Using an OpenCode, Antigravity, Claude Code, Codex, Devin / Codeium, or Freebuff / Codebuff chat
 
-`mm` can extract the commit message from OpenCode, Antigravity, Claude Code, Codex, or Devin / Codeium chats:
+`mm` can extract the commit message from OpenCode, Antigravity, Claude Code, Codex, Devin / Codeium, or Freebuff / Codebuff chats:
 
 ```sh
-mm --chat --print # preview the message (auto-detects OpenCode, Antigravity, Claude Code, Codex, or Devin)
+mm --chat --print # preview the message (auto-detects OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff)
 mm --agy --print # preview message from the latest Antigravity log
 mm --claude --print # preview message from the latest Claude Code log
 mm --codex --print # preview message from the latest Codex log
 mm --devin --print # preview message from the latest Devin / Cascade log
-mm --devin # commit using the latest Devin / Cascade log
+mm --freebuff --print # preview message from the latest Freebuff / Codebuff log
+mm --freebuff # commit using the latest Freebuff / Codebuff log
 ```
 
 - OpenCode: `OPENCODE_SESSION_ID` selects the session. The subject is the session title (or latest user prompt line), and the body is the last assistant message (or compaction summary).
@@ -120,7 +122,8 @@ mm --devin # commit using the latest Devin / Cascade log
 - Claude Code: Transcript logs from `~/.claude/projects/` (or `CLAUDE_SESSION_ID`) are read. The subject is the latest user prompt line, and the body is the last assistant text response.
 - Codex: Transcript logs from `~/.codex/sessions/` (or `CODEX_SESSION_ID`) are read. The subject is the thread title from `session_index.jsonl` (or latest user prompt line), and the body is the last assistant response.
 - Devin / Codeium: Devin ATIF JSON/JSONL transcripts and Codeium Windsurf Cascade trajectory markdown files from `~/.local/share/devin/cli/transcripts`, `~/.config/devin`, `~/.devin`, `~/.codeium/windsurf/cascade` (or `DEVIN_HOME`, `DEVIN_SESSION_ID`) are read. The subject is the session title or latest user prompt line, and the body is the last assistant text response.
-- `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, `--devin-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path.
+- Freebuff / Codebuff: Chat transcripts from `~/.config/manicode/projects/<project>/chats/<chat-id>/chat-messages.json` (or `FREEBUFF_CONFIG_DIR`, `CODEBUFF_CONFIG_DIR`, `FREEBUFF_HOME`, or `FREEBUFF_SESSION_ID`) are read. The subject is the first user prompt line (or session title from `chat-meta.json`), and the body is the last assistant text response.
+- `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, `--devin-session <ID>`, `--freebuff-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path.
 - `--message` overrides the subject; the copied message remains the body.
 - User file URIs like `file:///Users/user/...` are sanitized to `~/...` to prevent leaking local user names, and references to the current repository directory are sanitized to `./`.
 - When Conventional Commits are enabled, commitlint rules shape the copied chat subject: inferring a missing conventional `type:` prefix from git changes, formatting casing, stripping forbidden trailing full stops, and fitting length limits. The assistant body is copied intact.

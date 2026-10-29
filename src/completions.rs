@@ -58,7 +58,7 @@ _mm() {
             COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") )
             return 0
             ;;
-        --chat-session|--agy-session|--claude-session|--codex-session|--devin-session|--codeium-session)
+        --chat-session|--agy-session|--claude-session|--codex-session|--devin-session|--codeium-session|--freebuff-session|--codebuff-session)
             COMPREPLY=( $(compgen -f -- "$cur") )
             return 0
             ;;
@@ -75,6 +75,7 @@ _mm() {
 -m --message --chat --chat-session --agy --antigravity --agy-session \
 --claude --claude-session --codex --codex-session \
 --devin --codeium --devin-session --codeium-session \
+--freebuff --codebuff --freebuff-session --codebuff-session \
 -c --config -s --staged --no-verify --verbose -n --no-edit \
 --completions -h --help -v -V --version"
 
@@ -110,6 +111,10 @@ _mm() {
     '--codeium[Copy the Devin / Codeium last log commit message]' \
     '--devin-session[Use a specific Devin / Codeium session]:session:_files' \
     '--codeium-session[Use a specific Devin / Codeium session]:session:_files' \
+    '--freebuff[Copy the Freebuff / Codebuff last log commit message]' \
+    '--codebuff[Copy the Freebuff / Codebuff last log commit message]' \
+    '--freebuff-session[Use a specific Freebuff / Codebuff session]:session:_files' \
+    '--codebuff-session[Use a specific Freebuff / Codebuff session]:session:_files' \
     '(-c --config)'{-c,--config}'[Use a specific commitlint config]:file:_files' \
     '(-s --staged)'{-s,--staged}'[Only use staged changes]' \
     '--no-verify[Bypass Git commit hooks]' \
@@ -148,6 +153,10 @@ complete -c mm -l devin -d 'Copy the Devin / Codeium last log commit message'
 complete -c mm -l codeium -d 'Copy the Devin / Codeium last log commit message'
 complete -c mm -l devin-session -r -F -d 'Use a specific Devin / Codeium session'
 complete -c mm -l codeium-session -r -F -d 'Use a specific Devin / Codeium session'
+complete -c mm -l freebuff -d 'Copy the Freebuff / Codebuff last log commit message'
+complete -c mm -l codebuff -d 'Copy the Freebuff / Codebuff last log commit message'
+complete -c mm -l freebuff-session -r -F -d 'Use a specific Freebuff / Codebuff session'
+complete -c mm -l codebuff-session -r -F -d 'Use a specific Freebuff / Codebuff session'
 complete -c mm -s c -l config -r -F -d 'Use a specific commitlint config'
 complete -c mm -s s -l staged -d 'Only use staged changes'
 complete -c mm -l no-verify -d 'Bypass Git commit hooks'

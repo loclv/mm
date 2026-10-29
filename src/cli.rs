@@ -46,6 +46,8 @@ pub struct Options {
     pub codex: bool,
     /// Force copying from Devin / Codeium.
     pub devin: bool,
+    /// Force copying from Freebuff / Codebuff.
+    pub freebuff: bool,
     /// Chat session or conversation ID to copy; implies `chat`.
     pub chat_session: Option<String>,
     /// Explicit commitlint configuration file.
@@ -78,11 +80,12 @@ Messages follow Conventional Commits by default. Add `mm.json` with
 {\"autoAdd\": false} to disable automatically staging all changes when none are staged.
 
 Pass --chat to copy the title and last assistant message from the current
-OpenCode, Antigravity, Claude Code, Codex, or Devin session instead; chat messages are not
+OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff session instead; chat messages are not
 reshaped by commitlint. If copying from chat fails, mm automatically falls back
 to auto commit message generation. Use --chat-session <ID> to select a different
 session, --agy to copy from Antigravity, --claude to copy from Claude Code, --codex
-to copy from Codex, or --devin to copy from Devin / Codeium.
+to copy from Codex, --devin to copy from Devin / Codeium, or --freebuff to copy from
+Freebuff / Codebuff.
 
 Options:
       --completions <SHELL> # Print a completion script for bash, zsh, or fish
@@ -91,7 +94,7 @@ Options:
   -p, --print # Print the generated message and exit without committing
   -d, --dry-run # Alias for --print
   -m, --message <MSG> # Merge the generated description (or override a chat subject)
-      --chat # Copy the chat title and last message (OpenCode, Antigravity, Claude Code, Codex, or Devin)
+      --chat # Copy the chat title and last message (OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff)
       --chat-session <ID> # Use a specific session ID or transcript path (implies --chat)
       --agy, --antigravity # Copy the Antigravity last log commit message (implies --chat)
       --agy-session <ID> # Use a specific Antigravity conversation (implies --agy)
@@ -101,6 +104,8 @@ Options:
       --codex-session <ID> # Use a specific Codex session (implies --codex)
       --devin, --codeium # Copy the Devin / Codeium last log commit message (implies --chat)
       --devin-session <ID> # Use a specific Devin / Codeium session (implies --devin)
+      --freebuff, --codebuff # Copy the Freebuff / Codebuff last log commit message (implies --chat)
+      --freebuff-session <ID> # Use a specific Freebuff / Codebuff session (implies --freebuff)
   -c, --config <FILE> # Use this commitlint configuration instead of searching
   -s, --staged # Only use staged changes; never fall back to unstaged
       --no-verify # Bypass Git commit hooks
@@ -118,6 +123,7 @@ Examples:
   mm --claude --print # Preview the message copied from Claude Code's last log
   mm --codex --print # Preview the message copied from Codex's last log
   mm --devin --print # Preview the message copied from Devin's last log
+  mm --freebuff --print # Preview the message copied from Freebuff's last log
   mm -m 'JIRA-1: fix' # Keep the existing prefix/description
   mm --completions zsh > ~/.zfunc/_mm # Install zsh completions
 ";
@@ -208,6 +214,19 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
                 options.devin = true;
                 options.chat_session = Some(value.clone());
             }
+            "--freebuff" | "--codebuff" => {
+                options.chat = true;
+                options.freebuff = true;
+            }
+            "--freebuff-session" | "--codebuff-session" => {
+                index += 1;
+                let value = args
+                    .get(index)
+                    .ok_or_else(|| format!("`{arg}` requires a value"))?;
+                options.chat = true;
+                options.freebuff = true;
+                options.chat_session = Some(value.clone());
+            }
             "--chat-session" => {
                 index += 1;
                 let value = args
@@ -258,6 +277,16 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
                 options.chat = true;
                 options.devin = true;
                 options.chat_session = Some(arg["--codeium-session=".len()..].to_string());
+            }
+            _ if arg.starts_with("--freebuff-session=") => {
+                options.chat = true;
+                options.freebuff = true;
+                options.chat_session = Some(arg["--freebuff-session=".len()..].to_string());
+            }
+            _ if arg.starts_with("--codebuff-session=") => {
+                options.chat = true;
+                options.freebuff = true;
+                options.chat_session = Some(arg["--codebuff-session=".len()..].to_string());
             }
             _ if arg.starts_with("--chat-session=") => {
                 options.chat = true;
@@ -357,6 +386,7 @@ pub fn execute(options: &Options) -> Result<(), String> {
             options.claude,
             options.codex,
             options.devin,
+            options.freebuff,
             options.verbose,
         );
 
@@ -549,6 +579,7 @@ mod tests {
                 claude: false,
                 codex: false,
                 devin: false,
+                freebuff: false,
                 chat_session: None,
                 config: None,
                 staged_only: true,
@@ -721,6 +752,48 @@ mod tests {
                 ..Options::default()
             })
         );
+
+        assert_eq!(
+            parse_args(&args(&["--freebuff"])).unwrap(),
+            Command::Run(Options {
+                chat: true,
+                freebuff: true,
+                ..Options::default()
+            })
+        );
+
+        assert_eq!(
+            parse_args(&args(&["--codebuff"])).unwrap(),
+            Command::Run(Options {
+                chat: true,
+                freebuff: true,
+                ..Options::default()
+            })
+        );
+
+        let freebuff_space = parse_args(&args(&["--freebuff-session", "freebuff_test"])).unwrap();
+        let freebuff_equals = parse_args(&args(&["--freebuff-session=freebuff_test"])).unwrap();
+        assert_eq!(freebuff_space, freebuff_equals);
+        assert_eq!(
+            freebuff_space,
+            Command::Run(Options {
+                chat: true,
+                freebuff: true,
+                chat_session: Some("freebuff_test".to_string()),
+                ..Options::default()
+            })
+        );
+
+        let codebuff_equals = parse_args(&args(&["--codebuff-session=codebuff_test"])).unwrap();
+        assert_eq!(
+            codebuff_equals,
+            Command::Run(Options {
+                chat: true,
+                freebuff: true,
+                chat_session: Some("codebuff_test".to_string()),
+                ..Options::default()
+            })
+        );
     }
 
     #[test]
@@ -731,6 +804,8 @@ mod tests {
         assert!(parse_args(&args(&["--codex-session"])).is_err());
         assert!(parse_args(&args(&["--devin-session"])).is_err());
         assert!(parse_args(&args(&["--codeium-session"])).is_err());
+        assert!(parse_args(&args(&["--freebuff-session"])).is_err());
+        assert!(parse_args(&args(&["--codebuff-session"])).is_err());
     }
 
     #[test]

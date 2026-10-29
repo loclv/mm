@@ -1248,6 +1248,8 @@ fn chat_auto_detects_claude_when_others_not_set() {
             "ANTIGRAVITY_CONVERSATION_ID",
             "CLAUDE_SESSION_ID",
             "CODEX_SESSION_ID",
+            "FREEBUFF_SESSION_ID",
+            "CODEBUFF_SESSION_ID",
         ],
     );
 
@@ -1361,6 +1363,8 @@ fn chat_auto_detects_codex_when_others_not_set() {
             "ANTIGRAVITY_CONVERSATION_ID",
             "CLAUDE_SESSION_ID",
             "CODEX_SESSION_ID",
+            "FREEBUFF_SESSION_ID",
+            "CODEBUFF_SESSION_ID",
         ],
     );
 
@@ -1549,6 +1553,8 @@ fn chat_auto_detects_devin_when_others_not_set() {
             "ANTIGRAVITY_CONVERSATION_ID",
             "CLAUDE_SESSION_ID",
             "CODEX_SESSION_ID",
+            "FREEBUFF_SESSION_ID",
+            "CODEBUFF_SESSION_ID",
         ],
     );
 
@@ -1559,6 +1565,158 @@ fn chat_auto_detects_devin_when_others_not_set() {
     );
 
     let _ = fs::remove_dir_all(devin_dir);
+}
+
+#[test]
+fn copies_freebuff_last_log_with_freebuff_flag() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let fb_dir = std::env::temp_dir().join(format!("mm-test-fb-{}", std::process::id()));
+    let repo_name = repo.path().file_name().unwrap().to_string_lossy();
+    let chat_dir = fb_dir
+        .join("projects")
+        .join(&*repo_name)
+        .join("chats")
+        .join("chat-1");
+    fs::create_dir_all(&chat_dir).unwrap();
+
+    let transcript = r#"[
+        {"id":"m1","variant":"user","content":"implement Freebuff transcript parser"},
+        {"id":"m2","variant":"ai","content":"raw content","blocks":[{"type":"text","content":"Added Freebuff support."}]}
+    ]"#;
+    fs::write(chat_dir.join("chat-messages.json"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--freebuff", "--print"],
+        &[("FREEBUFF_CONFIG_DIR", &fb_dir.to_string_lossy())],
+        &["FREEBUFF_SESSION_ID", "CODEBUFF_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "implement Freebuff transcript parser\n\nAdded Freebuff support."
+    );
+
+    let _ = fs::remove_dir_all(fb_dir);
+}
+
+#[test]
+fn copies_freebuff_last_log_with_codebuff_flag() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let fb_dir = std::env::temp_dir().join(format!("mm-test-cb-{}", std::process::id()));
+    let repo_name = repo.path().file_name().unwrap().to_string_lossy();
+    let chat_dir = fb_dir
+        .join("projects")
+        .join(&*repo_name)
+        .join("chats")
+        .join("chat-codebuff");
+    fs::create_dir_all(&chat_dir).unwrap();
+
+    let transcript = r#"[
+        {"variant":"user","content":"support codebuff alias"},
+        {"variant":"ai","content":"Supported Codebuff CLI alias."}
+    ]"#;
+    fs::write(chat_dir.join("chat-messages.json"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--codebuff", "--print"],
+        &[("CODEBUFF_CONFIG_DIR", &fb_dir.to_string_lossy())],
+        &["FREEBUFF_SESSION_ID", "CODEBUFF_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "support codebuff alias\n\nSupported Codebuff CLI alias."
+    );
+
+    let _ = fs::remove_dir_all(fb_dir);
+}
+
+#[test]
+fn copies_freebuff_log_with_freebuff_session() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let fb_dir = std::env::temp_dir().join(format!("mm-test-fb-sess-{}", std::process::id()));
+    let repo_name = repo.path().file_name().unwrap().to_string_lossy();
+    let chat_dir = fb_dir
+        .join("projects")
+        .join(&*repo_name)
+        .join("chats")
+        .join("my-specific-fb");
+    fs::create_dir_all(&chat_dir).unwrap();
+
+    let transcript = r#"[
+        {"variant":"user","content":"fix freebuff session target"},
+        {"variant":"ai","content":"Fixed Freebuff session target."}
+    ]"#;
+    fs::write(chat_dir.join("chat-messages.json"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--freebuff-session", "my-specific-fb", "--print"],
+        &[("FREEBUFF_CONFIG_DIR", &fb_dir.to_string_lossy())],
+        &["FREEBUFF_SESSION_ID", "CODEBUFF_SESSION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "fix freebuff session target\n\nFixed Freebuff session target."
+    );
+
+    let _ = fs::remove_dir_all(fb_dir);
+}
+
+#[test]
+fn chat_auto_detects_freebuff_when_others_not_set() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let fb_dir = std::env::temp_dir().join(format!("mm-test-fb-auto-{}", std::process::id()));
+    let repo_name = repo.path().file_name().unwrap().to_string_lossy();
+    let chat_dir = fb_dir
+        .join("projects")
+        .join(&*repo_name)
+        .join("chats")
+        .join("auto-chat");
+    fs::create_dir_all(&chat_dir).unwrap();
+
+    let transcript = r#"[
+        {"variant":"user","content":"auto detected freebuff prompt"},
+        {"variant":"ai","content":"Auto detected freebuff response."}
+    ]"#;
+    fs::write(chat_dir.join("chat-messages.json"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[("FREEBUFF_CONFIG_DIR", &fb_dir.to_string_lossy())],
+        &[
+            "DEVIN_SESSION_ID",
+            "OPENCODE_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+            "CLAUDE_SESSION_ID",
+            "CODEX_SESSION_ID",
+            "FREEBUFF_SESSION_ID",
+            "CODEBUFF_SESSION_ID",
+        ],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "auto detected freebuff prompt\n\nAuto detected freebuff response."
+    );
+
+    let _ = fs::remove_dir_all(fb_dir);
 }
 
 #[test]

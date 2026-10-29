@@ -1,4 +1,4 @@
-//! Copy a commit message from an OpenCode, Antigravity, Claude Code, or Codex chat session.
+//! Copy a commit message from an OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff chat session.
 //!
 //! OpenCode owns its session database, but it exposes a stable JSON export
 //! through `opencode session export <id>`. The export contains the session
@@ -46,6 +46,24 @@ pub const DEVIN_SESSION_ENV: &str = "DEVIN_SESSION_ID";
 
 /// Environment variable for Devin home directory override (useful for tests).
 pub const DEVIN_HOME_ENV: &str = "DEVIN_HOME";
+
+/// Environment variable for explicit Freebuff session ID.
+pub const FREEBUFF_SESSION_ENV: &str = "FREEBUFF_SESSION_ID";
+
+/// Environment variable for explicit Codebuff session ID alias.
+pub const CODEBUFF_SESSION_ENV: &str = "CODEBUFF_SESSION_ID";
+
+/// Environment variable for Freebuff config directory override (useful for tests).
+pub const FREEBUFF_CONFIG_DIR_ENV: &str = "FREEBUFF_CONFIG_DIR";
+
+/// Environment variable for Codebuff config directory override (useful for tests).
+pub const CODEBUFF_CONFIG_DIR_ENV: &str = "CODEBUFF_CONFIG_DIR";
+
+/// Environment variable for Freebuff home directory override (useful for tests).
+pub const FREEBUFF_HOME_ENV: &str = "FREEBUFF_HOME";
+
+/// Environment variable for Codebuff home directory override (useful for tests).
+pub const CODEBUFF_HOME_ENV: &str = "CODEBUFF_HOME";
 
 /// Longest fallback subject, in characters.
 const FALLBACK_SUBJECT_MAX: usize = 72;
@@ -658,6 +676,8 @@ fn is_tool_marker_line(trimmed: &str) -> bool {
         "<thought>",
         "</thinking>",
         "<thinking>",
+        "</think>",
+        "<think>",
         "</function_call>",
         "<function_call>",
     ];
@@ -696,6 +716,7 @@ pub fn strip_tool_residue(text: &str) -> String {
         "antml:function_call",
         "thought",
         "thinking",
+        "think",
     ];
 
     for tag in xml_tags {
@@ -2923,9 +2944,610 @@ pub fn load_devin(
     parse_devin_reader(reader, session_id, repo_root)
 }
 
+/// Return candidate configuration / data directories for Freebuff and Codebuff.
+pub fn freebuff_config_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+
+    for env_var in [
+        FREEBUFF_CONFIG_DIR_ENV,
+        CODEBUFF_CONFIG_DIR_ENV,
+        FREEBUFF_HOME_ENV,
+        CODEBUFF_HOME_ENV,
+    ] {
+        if let Ok(dir) = std::env::var(env_var) {
+            let p = PathBuf::from(dir);
+            if p.is_dir() {
+                dirs.push(p);
+            }
+        }
+    }
+
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        dirs.push(home.join(".config").join("manicode"));
+        dirs.push(home.join(".config").join("freebuff"));
+        dirs.push(home.join(".config").join("codebuff"));
+        dirs.push(home.join(".freebuff"));
+        dirs.push(home.join(".codebuff"));
+        dirs.push(home.join(".manicode"));
+    }
+
+    if let Some(appdata) = std::env::var_os("APPDATA").map(PathBuf::from) {
+        dirs.push(appdata.join("manicode"));
+        dirs.push(appdata.join("freebuff"));
+        dirs.push(appdata.join("codebuff"));
+    }
+
+    dirs.retain(|d| d.is_dir());
+    dirs.dedup();
+    dirs
+}
+
+fn collect_freebuff_candidates_in(
+    config_dir: &Path,
+    repo_root: Option<&Path>,
+    project_candidates: &mut Vec<(SystemTime, String, PathBuf)>,
+    other_candidates: &mut Vec<(SystemTime, String, PathBuf)>,
+) {
+    let project_name = repo_root
+        .and_then(|r| r.file_name())
+        .and_then(|s| s.to_str());
+
+    let projects_dir = config_dir.join("projects");
+    if let Ok(entries) = fs::read_dir(&projects_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let entry_name = entry.file_name().to_string_lossy().to_string();
+                let is_matching_project = project_name.map(|p| p == entry_name).unwrap_or(false);
+
+                let chats_dir = entry.path().join("chats");
+                if let Ok(chat_entries) = fs::read_dir(&chats_dir) {
+                    for chat_entry in chat_entries.flatten() {
+                        let chat_path = chat_entry.path();
+                        if chat_path.is_dir() {
+                            let msg_file = chat_path.join("chat-messages.json");
+                            if msg_file.is_file() {
+                                let id = chat_path
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or("freebuff")
+                                    .to_string();
+                                let mtime = fs::metadata(&msg_file)
+                                    .and_then(|m| m.modified())
+                                    .or_else(|_| {
+                                        fs::metadata(&chat_path).and_then(|m| m.modified())
+                                    })
+                                    .unwrap_or(UNIX_EPOCH);
+
+                                if is_matching_project {
+                                    project_candidates.push((mtime, id, msg_file));
+                                } else {
+                                    other_candidates.push((mtime, id, msg_file));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Direct chats dir under config_dir
+    let chats_dir = config_dir.join("chats");
+    if let Ok(chat_entries) = fs::read_dir(&chats_dir) {
+        for chat_entry in chat_entries.flatten() {
+            let chat_path = chat_entry.path();
+            if chat_path.is_dir() {
+                let msg_file = chat_path.join("chat-messages.json");
+                if msg_file.is_file() {
+                    let id = chat_path
+                        .file_name()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("freebuff")
+                        .to_string();
+                    let mtime = fs::metadata(&msg_file)
+                        .and_then(|m| m.modified())
+                        .or_else(|_| fs::metadata(&chat_path).and_then(|m| m.modified()))
+                        .unwrap_or(UNIX_EPOCH);
+                    other_candidates.push((mtime, id, msg_file));
+                }
+            }
+        }
+    }
+}
+
+/// Find the latest Freebuff / Codebuff session log inside a configuration directory.
+pub fn find_latest_freebuff_log_in(
+    config_dir: &Path,
+    repo_root: Option<&Path>,
+) -> Option<(String, PathBuf)> {
+    let mut project_candidates = Vec::new();
+    let mut other_candidates = Vec::new();
+    collect_freebuff_candidates_in(
+        config_dir,
+        repo_root,
+        &mut project_candidates,
+        &mut other_candidates,
+    );
+
+    if !project_candidates.is_empty() {
+        project_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+        let (_, id, path) = project_candidates.remove(0);
+        return Some((id, path));
+    }
+
+    if !other_candidates.is_empty() {
+        other_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+        let (_, id, path) = other_candidates.remove(0);
+        return Some((id, path));
+    }
+
+    None
+}
+
+/// Find the latest Freebuff / Codebuff session log.
+pub fn find_latest_freebuff_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+    let dirs = freebuff_config_dirs();
+    let mut project_candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+    let mut other_candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+
+    for config_dir in &dirs {
+        collect_freebuff_candidates_in(
+            config_dir,
+            repo_root,
+            &mut project_candidates,
+            &mut other_candidates,
+        );
+    }
+
+    // Check inside repo root if .freebuff/chats or .codebuff/chats exists
+    if let Some(root) = repo_root {
+        for sub in [".freebuff", ".codebuff"] {
+            let chats_dir = root.join(sub).join("chats");
+            if let Ok(chat_entries) = fs::read_dir(&chats_dir) {
+                for chat_entry in chat_entries.flatten() {
+                    let chat_path = chat_entry.path();
+                    if chat_path.is_dir() {
+                        let msg_file = chat_path.join("chat-messages.json");
+                        if msg_file.is_file() {
+                            let id = chat_path
+                                .file_name()
+                                .and_then(|s| s.to_str())
+                                .unwrap_or("freebuff")
+                                .to_string();
+                            let mtime = fs::metadata(&msg_file)
+                                .and_then(|m| m.modified())
+                                .unwrap_or(UNIX_EPOCH);
+                            project_candidates.push((mtime, id, msg_file));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    if !project_candidates.is_empty() {
+        project_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+        let (_, id, path) = project_candidates.remove(0);
+        return Some((id, path));
+    }
+
+    if !other_candidates.is_empty() {
+        other_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+        let (_, id, path) = other_candidates.remove(0);
+        return Some((id, path));
+    }
+
+    None
+}
+
+/// Resolve a Freebuff session inside a configuration directory.
+pub fn resolve_freebuff_session_in(
+    config_dir: &Path,
+    session: &str,
+    repo_root: Option<&Path>,
+) -> Option<(String, PathBuf)> {
+    let project_name = repo_root
+        .and_then(|r| r.file_name())
+        .and_then(|s| s.to_str());
+
+    // 1. Check matching project first if repo_root is available
+    if let Some(proj) = project_name {
+        let chat_dir = config_dir
+            .join("projects")
+            .join(proj)
+            .join("chats")
+            .join(session);
+        let msg_file = chat_dir.join("chat-messages.json");
+        if msg_file.is_file() {
+            return Some((session.to_string(), msg_file));
+        }
+    }
+
+    // 2. Check all projects in config_dir
+    let projects_dir = config_dir.join("projects");
+    if let Ok(entries) = fs::read_dir(&projects_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let chat_dir = entry.path().join("chats").join(session);
+                let msg_file = chat_dir.join("chat-messages.json");
+                if msg_file.is_file() {
+                    return Some((session.to_string(), msg_file));
+                }
+            }
+        }
+    }
+
+    // 3. Direct chats directory
+    let chat_dir = config_dir.join("chats").join(session);
+    let msg_file = chat_dir.join("chat-messages.json");
+    if msg_file.is_file() {
+        return Some((session.to_string(), msg_file));
+    }
+
+    // 4. Prefix or fuzzy matching across all chats
+    if let Ok(entries) = fs::read_dir(&projects_dir) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let chats_dir = entry.path().join("chats");
+                if let Ok(chat_entries) = fs::read_dir(&chats_dir) {
+                    for chat_entry in chat_entries.flatten() {
+                        let chat_path = chat_entry.path();
+                        if chat_path.is_dir() {
+                            let name = chat_path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                            if name == session
+                                || name.starts_with(session)
+                                || session.starts_with(name)
+                            {
+                                let msg_file = chat_path.join("chat-messages.json");
+                                if msg_file.is_file() {
+                                    return Some((name.to_string(), msg_file));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    None
+}
+
+/// Resolve a Freebuff session by session ID, chat directory, or file path.
+pub fn resolve_freebuff_session(
+    session: &str,
+    repo_root: Option<&Path>,
+) -> Option<(String, PathBuf)> {
+    let path = Path::new(session);
+    if path.is_file() {
+        let name = if path
+            .file_name()
+            .map(|n| n == "chat-messages.json")
+            .unwrap_or(false)
+        {
+            path.parent()
+                .and_then(|p| p.file_name())
+                .and_then(|s| s.to_str())
+                .unwrap_or("freebuff")
+                .to_string()
+        } else {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("freebuff")
+                .to_string()
+        };
+        return Some((name, path.to_path_buf()));
+    }
+    if path.is_dir() {
+        let direct = path.join("chat-messages.json");
+        if direct.is_file() {
+            let name = path
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("freebuff")
+                .to_string();
+            return Some((name, direct));
+        }
+    }
+
+    for dir in freebuff_config_dirs() {
+        if let Some(resolved) = resolve_freebuff_session_in(&dir, session, repo_root) {
+            return Some(resolved);
+        }
+    }
+
+    // Check inside repo root if .freebuff/chats or .codebuff/chats exists
+    if let Some(root) = repo_root {
+        for sub in [".freebuff", ".codebuff"] {
+            let chat_dir = root.join(sub).join("chats").join(session);
+            let msg_file = chat_dir.join("chat-messages.json");
+            if msg_file.is_file() {
+                return Some((session.to_string(), msg_file));
+            }
+        }
+    }
+
+    None
+}
+
+/// Extract visible text content from a Freebuff / Codebuff assistant turn.
+fn extract_freebuff_assistant_text(value: &Value) -> Option<String> {
+    if let Some(blocks) = value.get("blocks").and_then(Value::as_array) {
+        let mut texts = Vec::new();
+        for block in blocks {
+            let btype = block.get("type").and_then(Value::as_str).unwrap_or("");
+            if btype == "text" {
+                let text_type = block.get("textType").and_then(Value::as_str).unwrap_or("");
+                if text_type == "reasoning" {
+                    continue;
+                }
+                if let Some(content) = block
+                    .get("content")
+                    .or_else(|| block.get("text"))
+                    .and_then(Value::as_str)
+                {
+                    let trimmed = content.trim();
+                    if !trimmed.is_empty() {
+                        texts.push(trimmed.to_string());
+                    }
+                }
+            } else if btype == "agent" {
+                if let Some(agent_blocks) = block.get("blocks").and_then(Value::as_array) {
+                    for ablock in agent_blocks {
+                        if ablock.get("type").and_then(Value::as_str) == Some("text") {
+                            let text_type =
+                                ablock.get("textType").and_then(Value::as_str).unwrap_or("");
+                            if text_type != "reasoning"
+                                && let Some(content) = ablock
+                                    .get("content")
+                                    .or_else(|| ablock.get("text"))
+                                    .and_then(Value::as_str)
+                            {
+                                let trimmed = content.trim();
+                                if !trimmed.is_empty() {
+                                    texts.push(trimmed.to_string());
+                                }
+                            }
+                        }
+                    }
+                } else if let Some(content) = block.get("content").and_then(Value::as_str) {
+                    let trimmed = content.trim();
+                    if !trimmed.is_empty() {
+                        texts.push(trimmed.to_string());
+                    }
+                }
+            }
+        }
+        if !texts.is_empty() {
+            return Some(texts.join("\n\n"));
+        }
+    }
+
+    if let Some(content) = value
+        .get("content")
+        .or_else(|| value.get("text"))
+        .and_then(Value::as_str)
+    {
+        let stripped = strip_xml_tag_block(content, "think");
+        let stripped = strip_thinking_blocks(&stripped);
+        let trimmed = stripped.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    None
+}
+
+/// Extract visible text content from a Freebuff / Codebuff user turn.
+fn extract_freebuff_user_text(value: &Value) -> Option<String> {
+    if let Some(content) = value
+        .get("content")
+        .or_else(|| value.get("text"))
+        .and_then(Value::as_str)
+    {
+        let trimmed = content.trim();
+        if !trimmed.is_empty() {
+            return Some(trimmed.to_string());
+        }
+    }
+
+    if let Some(blocks) = value.get("blocks").and_then(Value::as_array) {
+        let mut texts = Vec::new();
+        for block in blocks {
+            let btype = block.get("type").and_then(Value::as_str).unwrap_or("");
+            if (btype == "text" || btype.is_empty())
+                && let Some(content) = block
+                    .get("content")
+                    .or_else(|| block.get("text"))
+                    .and_then(Value::as_str)
+            {
+                let trimmed = content.trim();
+                if !trimmed.is_empty() {
+                    texts.push(trimmed.to_string());
+                }
+            }
+        }
+        if !texts.is_empty() {
+            return Some(texts.join("\n\n"));
+        }
+    }
+
+    None
+}
+
+/// Parse a Freebuff / Codebuff transcript from a reader.
+pub fn parse_freebuff_reader<R: BufRead>(
+    mut reader: R,
+    session_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
+    let mut buffer = String::new();
+    reader
+        .read_to_string(&mut buffer)
+        .map_err(|e| format!("failed to read transcript: {e}"))?;
+
+    let trimmed = buffer.trim();
+    if trimmed.is_empty() {
+        return Err(format!(
+            "Freebuff session `{session_id}` has no assistant response text to copy"
+        ));
+    }
+
+    let mut latest_prompt: Option<String> = None;
+    let mut last_message: Option<String> = None;
+    let mut title: Option<String> = None;
+
+    if (trimmed.starts_with('[') || trimmed.starts_with('{'))
+        && let Ok(root_val) = serde_json::from_str::<Value>(trimmed)
+    {
+        if let Some(t) = root_val
+            .get("title")
+            .or_else(|| root_val.get("session_name"))
+            .or_else(|| root_val.get("name"))
+            .and_then(Value::as_str)
+        {
+            let t_trimmed = t.trim();
+            if !t_trimmed.is_empty() && !is_placeholder_title(t_trimmed) {
+                title = Some(t_trimmed.to_string());
+            }
+        }
+
+        let items: Option<&Vec<Value>> = root_val
+            .as_array()
+            .or_else(|| root_val.get("messages").and_then(Value::as_array))
+            .or_else(|| root_val.get("steps").and_then(Value::as_array))
+            .or_else(|| root_val.get("history").and_then(Value::as_array));
+
+        if let Some(messages) = items {
+            for msg in messages {
+                let variant = msg
+                    .get("variant")
+                    .or_else(|| msg.get("role"))
+                    .or_else(|| msg.get("type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+
+                if variant == "user" {
+                    if let Some(text) = extract_freebuff_user_text(msg) {
+                        let cleaned_text = extract_user_request(&text);
+                        if let Some(first) = first_line(&cleaned_text) {
+                            let cleaned = clean_prompt_line(&first);
+                            if !cleaned.is_empty() {
+                                latest_prompt = Some(sanitize_file_urls(&cleaned));
+                            }
+                        }
+                    }
+                } else if (variant == "ai"
+                    || variant == "assistant"
+                    || variant == "agent"
+                    || variant == "model")
+                    && let Some(text) = extract_freebuff_assistant_text(msg)
+                {
+                    let trimmed_text = text.trim();
+                    if !trimmed_text.is_empty() {
+                        last_message = Some(sanitize_file_urls(trimmed_text));
+                    }
+                }
+            }
+        }
+    }
+
+    if last_message.is_none() {
+        for line in trimmed.lines() {
+            let line_trimmed = line.trim();
+            if line_trimmed.is_empty() {
+                continue;
+            }
+            if let Ok(msg) = serde_json::from_str::<Value>(line_trimmed) {
+                let variant = msg
+                    .get("variant")
+                    .or_else(|| msg.get("role"))
+                    .or_else(|| msg.get("type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+
+                if variant == "user" {
+                    if let Some(text) = extract_freebuff_user_text(&msg) {
+                        let cleaned_text = extract_user_request(&text);
+                        if let Some(first) = first_line(&cleaned_text) {
+                            let cleaned = clean_prompt_line(&first);
+                            if !cleaned.is_empty() {
+                                latest_prompt = Some(sanitize_file_urls(&cleaned));
+                            }
+                        }
+                    }
+                } else if (variant == "ai"
+                    || variant == "assistant"
+                    || variant == "agent"
+                    || variant == "model")
+                    && let Some(text) = extract_freebuff_assistant_text(&msg)
+                {
+                    let trimmed_text = text.trim();
+                    if !trimmed_text.is_empty() {
+                        last_message = Some(sanitize_file_urls(trimmed_text));
+                    }
+                }
+            }
+        }
+    }
+
+    let raw_body = last_message.ok_or_else(|| {
+        format!("Freebuff session `{session_id}` has no assistant response text to copy")
+    })?;
+
+    let sanitized_body = sanitize_chat_body(&raw_body, repo_root);
+
+    let (subject, subject_source) = if let Some(t) = title {
+        (truncate(&t, FALLBACK_SUBJECT_MAX), SubjectSource::Title)
+    } else if let Some(prompt) = latest_prompt {
+        let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
+        (
+            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
+            SubjectSource::LatestPrompt,
+        )
+    } else {
+        let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
+        let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
+        (
+            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
+            SubjectSource::LastMessage,
+        )
+    };
+
+    Ok(ChatMessage {
+        session_id: session_id.to_string(),
+        subject: sanitize_file_urls(&subject),
+        body: sanitized_body,
+        subject_source,
+    })
+}
+
+/// Parse a Freebuff / Codebuff transcript from a byte slice.
+pub fn parse_freebuff(transcript: &[u8], session_id: &str) -> Result<ChatMessage, String> {
+    parse_freebuff_reader(std::io::Cursor::new(transcript), session_id, None)
+}
+
+/// Load and parse a Freebuff / Codebuff transcript from disk.
+pub fn load_freebuff(
+    path: &Path,
+    session_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
+    let file = fs::File::open(path).map_err(|error| {
+        format!(
+            "could not open Freebuff transcript {}: {error}",
+            path.display()
+        )
+    })?;
+    let reader = std::io::BufReader::new(file);
+    parse_freebuff_reader(reader, session_id, repo_root)
+}
+
 /// Load and parse a session export or conversation log.
 ///
 /// Sources supported:
+/// - Explicit Freebuff / Codebuff session via `force_freebuff` or `session`.
 /// - Explicit Devin / Codeium session via `force_devin` or `session`.
 /// - Explicit Codex session via `force_codex` or `session`.
 /// - Explicit Claude Code session via `force_claude` or `session`.
@@ -2935,7 +3557,9 @@ pub fn load_devin(
 /// - `ANTIGRAVITY_CONVERSATION_ID` environment variable.
 /// - `CODEX_SESSION_ID` environment variable.
 /// - `DEVIN_SESSION_ID` environment variable.
-/// - Auto-detection of the latest conversation log across Antigravity, Claude Code, Codex, and Devin.
+/// - `FREEBUFF_SESSION_ID` / `CODEBUFF_SESSION_ID` environment variable.
+/// - Auto-detection of the latest conversation log across Antigravity, Claude Code, Codex, Devin, and Freebuff.
+#[allow(clippy::too_many_arguments)]
 pub fn load(
     session: Option<&str>,
     repo_root: Option<&Path>,
@@ -2943,6 +3567,7 @@ pub fn load(
     force_claude: bool,
     force_codex: bool,
     force_devin: bool,
+    force_freebuff: bool,
     verbose: bool,
 ) -> Result<ChatMessage, String> {
     let mut chat = load_raw(
@@ -2952,6 +3577,7 @@ pub fn load(
         force_claude,
         force_codex,
         force_devin,
+        force_freebuff,
         verbose,
     )?;
     chat.subject = sanitize_current_path(&chat.subject, repo_root);
@@ -2959,6 +3585,7 @@ pub fn load(
     Ok(chat)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn load_raw(
     session: Option<&str>,
     repo_root: Option<&Path>,
@@ -2966,9 +3593,39 @@ fn load_raw(
     force_claude: bool,
     force_codex: bool,
     force_devin: bool,
+    force_freebuff: bool,
     verbose: bool,
 ) -> Result<ChatMessage, String> {
     let trimmed_session = session.map(str::trim).filter(|value| !value.is_empty());
+
+    if force_freebuff {
+        let (id, path) = if let Some(sess) = trimmed_session {
+            resolve_freebuff_session(sess, repo_root)
+                .ok_or_else(|| format!("could not find Freebuff session or transcript `{sess}`"))?
+        } else if let Some((id, path)) = std::env::var(FREEBUFF_SESSION_ENV)
+            .or_else(|_| std::env::var(CODEBUFF_SESSION_ENV))
+            .ok()
+            .and_then(|sess| {
+                let s = sess.trim();
+                if s.is_empty() {
+                    None
+                } else {
+                    resolve_freebuff_session(s, repo_root)
+                }
+            })
+        {
+            (id, path)
+        } else {
+            find_latest_freebuff_log(repo_root)
+                .ok_or_else(|| "no Freebuff session log found".to_string())?
+        };
+
+        if verbose {
+            eprintln!("[mm] chat: using Freebuff log {} ({})", id, path.display());
+        }
+
+        return load_freebuff(&path, &id, repo_root);
+    }
 
     if force_devin {
         let (id, path) = if let Some(sess) = trimmed_session {
@@ -3085,6 +3742,13 @@ fn load_raw(
     }
 
     if let Some(sess) = trimmed_session {
+        if let Some((id, path)) = resolve_freebuff_session(sess, repo_root) {
+            if verbose {
+                eprintln!("[mm] chat: using Freebuff log {} ({})", id, path.display());
+            }
+            return load_freebuff(&path, &id, repo_root);
+        }
+
         if let Some((id, path)) = resolve_devin_session(sess) {
             if verbose {
                 eprintln!("[mm] chat: using Devin log {} ({})", id, path.display());
@@ -3142,6 +3806,20 @@ fn load_raw(
         return Err(format!(
             "no OpenCode session selected; set {SESSION_ENV} or pass --chat-session <ID>"
         ));
+    }
+
+    if let Ok(freebuff_session) =
+        std::env::var(FREEBUFF_SESSION_ENV).or_else(|_| std::env::var(CODEBUFF_SESSION_ENV))
+    {
+        let sess = freebuff_session.trim();
+        if !sess.is_empty()
+            && let Some((id, path)) = resolve_freebuff_session(sess, repo_root)
+        {
+            if verbose {
+                eprintln!("[mm] chat: using Freebuff log {} ({})", id, path.display());
+            }
+            return load_freebuff(&path, &id, repo_root);
+        }
     }
 
     if let Ok(devin_session) = std::env::var(DEVIN_SESSION_ENV) {
@@ -3205,7 +3883,7 @@ fn load_raw(
         }
     }
 
-    // Auto-detect between Antigravity, Claude Code, Codex, and Devin logs by latest modified time
+    // Auto-detect between Antigravity, Claude Code, Codex, Devin, and Freebuff logs by latest modified time
     let mut local_candidates: Vec<(SystemTime, String, PathBuf, &'static str)> = Vec::new();
 
     if let Some((id, path)) = find_latest_antigravity_log(repo_root) {
@@ -3232,6 +3910,12 @@ fn load_raw(
             .unwrap_or(UNIX_EPOCH);
         local_candidates.push((mtime, id, path, "Devin"));
     }
+    if let Some((id, path)) = find_latest_freebuff_log(repo_root) {
+        let mtime = fs::metadata(&path)
+            .and_then(|m| m.modified())
+            .unwrap_or(UNIX_EPOCH);
+        local_candidates.push((mtime, id, path, "Freebuff"));
+    }
 
     local_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
 
@@ -3248,12 +3932,13 @@ fn load_raw(
             "Claude Code" => load_claude(&path, &id, repo_root),
             "Codex" => load_codex(&path, &id, repo_root),
             "Devin" => load_devin(&path, &id, repo_root),
+            "Freebuff" => load_freebuff(&path, &id, repo_root),
             _ => unreachable!(),
         };
     }
 
     Err(format!(
-        "no OpenCode session, Antigravity log, Claude Code session, Codex session, or Devin log found; set {SESSION_ENV}, {ANTIGRAVITY_SESSION_ENV}, {CLAUDE_SESSION_ENV}, {CODEX_SESSION_ENV}, {DEVIN_SESSION_ENV}, or pass --chat-session <ID>"
+        "no OpenCode session, Antigravity log, Claude Code session, Codex session, Devin log, or Freebuff session found; set {SESSION_ENV}, {ANTIGRAVITY_SESSION_ENV}, {CLAUDE_SESSION_ENV}, {CODEX_SESSION_ENV}, {DEVIN_SESSION_ENV}, {FREEBUFF_SESSION_ENV}, or pass --chat-session <ID>"
     ))
 }
 
@@ -4291,6 +4976,152 @@ Router has been refactored to use async handlers across all routes.
         let err = parse_devin(transcript.as_bytes(), "empty-devin").unwrap_err();
         assert!(err.contains("no assistant response text"));
         assert!(err.contains("empty-devin"));
+    }
+
+    #[test]
+    fn parses_freebuff_chat_messages_json() {
+        let transcript = r#"[
+            {
+                "id": "msg-1",
+                "variant": "user",
+                "content": "Add Freebuff support to mm",
+                "timestamp": "2026-10-29T10:00:00.000Z"
+            },
+            {
+                "id": "msg-2",
+                "variant": "ai",
+                "content": "raw content",
+                "blocks": [
+                    {
+                        "type": "text",
+                        "content": "Thinking about the implementation...",
+                        "textType": "reasoning"
+                    },
+                    {
+                        "type": "tool",
+                        "toolCallId": "call-1",
+                        "toolName": "read_file",
+                        "input": {}
+                    },
+                    {
+                        "type": "text",
+                        "content": "Added Freebuff and Codebuff support to mm."
+                    },
+                    {
+                        "type": "agent",
+                        "blocks": [
+                            {
+                                "type": "text",
+                                "content": "Updated CLI flags and documentation."
+                            }
+                        ]
+                    }
+                ],
+                "timestamp": "2026-10-29T10:01:00.000Z"
+            }
+        ]"#;
+
+        let msg = parse_freebuff(transcript.as_bytes(), "freebuff-session-123").unwrap();
+        assert_eq!(msg.subject, "Add Freebuff support to mm");
+        assert_eq!(
+            msg.body,
+            "Added Freebuff and Codebuff support to mm.\n\nUpdated CLI flags and documentation."
+        );
+        assert_eq!(msg.session_id, "freebuff-session-123");
+        assert_eq!(msg.subject_source, SubjectSource::LatestPrompt);
+    }
+
+    #[test]
+    fn parses_freebuff_fallback_content() {
+        let transcript = r#"[
+            {"variant": "user", "content": "Refactor error handling"},
+            {"variant": "ai", "content": "<think>need to check err</think>Refactored error handling across modules."}
+        ]"#;
+
+        let msg = parse_freebuff(transcript.as_bytes(), "fb-fallback").unwrap();
+        assert_eq!(msg.subject, "Refactor error handling");
+        assert_eq!(msg.body, "Refactored error handling across modules.");
+        assert_eq!(msg.subject_source, SubjectSource::LatestPrompt);
+    }
+
+    #[test]
+    fn parses_freebuff_with_title() {
+        let transcript = r#"{
+            "title": "feat(chat): support freebuff",
+            "messages": [
+                {"variant": "user", "content": "hello freebuff"},
+                {"variant": "ai", "content": "Implemented freebuff integration."}
+            ]
+        }"#;
+
+        let msg = parse_freebuff(transcript.as_bytes(), "fb-title").unwrap();
+        assert_eq!(msg.subject, "feat(chat): support freebuff");
+        assert_eq!(msg.body, "Implemented freebuff integration.");
+        assert_eq!(msg.subject_source, SubjectSource::Title);
+    }
+
+    #[test]
+    fn parses_freebuff_jsonl() {
+        let transcript = r#"{"variant":"user","content":"Fix git diff detection"}
+{"variant":"assistant","content":"Fixed edge case in git diff status parser."}
+"#;
+
+        let msg = parse_freebuff(transcript.as_bytes(), "fb-jsonl").unwrap();
+        assert_eq!(msg.subject, "Fix git diff detection");
+        assert_eq!(msg.body, "Fixed edge case in git diff status parser.");
+        assert_eq!(msg.subject_source, SubjectSource::LatestPrompt);
+    }
+
+    #[test]
+    fn freebuff_rejects_empty_assistant() {
+        let transcript = r#"[{"variant":"user","content":"only a prompt"}]"#;
+        let err = parse_freebuff(transcript.as_bytes(), "empty-fb").unwrap_err();
+        assert!(err.contains("no assistant response text"));
+        assert!(err.contains("empty-fb"));
+    }
+
+    #[test]
+    fn resolves_freebuff_session_and_latest_log() {
+        let tmp = std::env::temp_dir().join(format!("mm-test-fb-res-{}", std::process::id()));
+        let project_dir = tmp
+            .join("projects")
+            .join("my-repo")
+            .join("chats")
+            .join("chat-abc");
+        fs::create_dir_all(&project_dir).unwrap();
+
+        let transcript = r#"[
+            {"variant":"user","content":"Support Freebuff in mm"},
+            {"variant":"ai","content":"Successfully added Freebuff support."}
+        ]"#;
+        fs::write(project_dir.join("chat-messages.json"), transcript).unwrap();
+
+        // 1. Resolve by direct path to file
+        let (id, p) = resolve_freebuff_session(
+            &project_dir.join("chat-messages.json").to_string_lossy(),
+            None,
+        )
+        .unwrap();
+        assert_eq!(id, "chat-abc");
+        assert!(p.is_file());
+
+        // 2. Resolve by direct path to directory
+        let (id, p) = resolve_freebuff_session(&project_dir.to_string_lossy(), None).unwrap();
+        assert_eq!(id, "chat-abc");
+        assert!(p.is_file());
+
+        // 3. Resolve inside config dir
+        let repo_path = PathBuf::from("/some/path/to/my-repo");
+        let (id, p) = resolve_freebuff_session_in(&tmp, "chat-abc", Some(&repo_path)).unwrap();
+        assert_eq!(id, "chat-abc");
+        assert!(p.is_file());
+
+        // 4. Find latest log inside config dir
+        let (id, p) = find_latest_freebuff_log_in(&tmp, Some(&repo_path)).unwrap();
+        assert_eq!(id, "chat-abc");
+        assert!(p.is_file());
+
+        let _ = fs::remove_dir_all(tmp);
     }
 
     #[test]

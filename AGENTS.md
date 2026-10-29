@@ -42,7 +42,7 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
 - `conventional.rs` picks types from paths, checking specific categories before
   general ones. `message.rs` owns wording, `policy.rs` translates commitlint
   rules, and `commitlint.rs` handles discovery/loading.
-- `chat.rs` loads chat context from OpenCode, Antigravity, Claude Code, or Codex.
+- `chat.rs` loads chat context from OpenCode, Antigravity, Claude Code, Codex, Devin / Codeium, or Freebuff / Codebuff.
   - OpenCode: shells out to `opencode session export <id>` and parses its JSON.
     `--chat` uses the session title as the subject and copies the last assistant
     message as the body, matching OpenCode's `/copy`; a completed compaction
@@ -78,6 +78,13 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
     specific session ID or file path. Auto-detection prioritizes logs matching the repository path.
     The subject is the session title or first line of the latest user prompt, falling back to the assistant message.
     The body is the text content from the last assistant message (excluding thinking blocks and tool calls).
+  - Freebuff / Codebuff: parses `chat-messages.json` transcripts from
+    `~/.config/manicode/projects/<project>/chats/<chat-id>/chat-messages.json` (or configured via
+    `FREEBUFF_CONFIG_DIR`, `CODEBUFF_CONFIG_DIR`, `FREEBUFF_HOME`, `CODEBUFF_HOME`, `FREEBUFF_SESSION_ID`, `CODEBUFF_SESSION_ID`).
+    `--freebuff` / `--codebuff` forces Freebuff mode; `--freebuff-session` / `--codebuff-session` selects a
+    specific session ID or file path. Auto-detection prioritizes logs matching the repository path.
+    The subject uses `title` from `chat-meta.json` if available, falling back to the first line of the user prompt,
+    falling back to the assistant message. The body is the text content from the last assistant message (excluding reasoning blocks and `<think>` tags).
   - Smart body sanitization strips conversational filler (e.g. "Sure! I will help you with...", "Here is a summary:"),
     polite sign-offs, tool call and thought residue (XML tags, tool fences, ReAct/CLI markers), and ANSI escape sequences.
   - `--message` overrides the copied subject. A session with no copyable text is
