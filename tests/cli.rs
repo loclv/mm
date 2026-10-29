@@ -604,7 +604,7 @@ fn mm_json_auto_add_respects_staged_only_flag() {
 }
 
 #[test]
-fn mm_json_auto_add_disabled_by_default() {
+fn mm_json_auto_add_can_be_disabled() {
     let repo = Repo::new();
     repo.write("mm.json", r#"{ "autoAdd": false }"#);
     repo.write("notes.txt", "hello\n");
@@ -613,6 +613,33 @@ fn mm_json_auto_add_disabled_by_default() {
 
     assert!(!output.status.success());
     assert!(stderr(&output).contains("no changes files"));
+}
+
+#[test]
+fn auto_add_commits_untracked_files_by_default_when_nothing_is_staged() {
+    let repo = Repo::new();
+    repo.write("notes.txt", "hello\n");
+
+    let output = repo.mm(&[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(repo.commit_count(), 2);
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
+}
+
+#[test]
+fn auto_add_preserves_staged_changes_by_default_when_some_are_staged() {
+    let repo = Repo::new();
+    repo.write("staged.txt", "staged content\n");
+    repo.git(&["add", "staged.txt"]);
+    repo.write("untracked.txt", "still untracked\n");
+
+    let output = repo.mm(&[]);
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(repo.latest_subject(), "feat: create staged.txt");
+    let status = repo.git(&["status", "--porcelain"]);
+    assert!(status.contains("?? untracked.txt"), "status: {status}");
 }
 
 #[test]
@@ -922,6 +949,38 @@ fn copies_antigravity_last_log_with_agy_flag() {
         stdout(&output),
         "fix parser edge cases\n\nFixed parser edge cases.\n\n- Handled trailing comma\n- Added regression test"
     );
+
+    let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
+fn copies_antigravity_log_with_agy_flag_auto_adds_untracked_files() {
+    let repo = Repo::new();
+    repo.write("untracked.txt", "new file content\n");
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-autoadd-{}", std::process::id()));
+    let conv_dir = brain.join("conv-12345");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    let transcript = format!(
+        r#"{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nadd untracked feature\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: {}\n</ADDITIONAL_METADATA>"}}
+{{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Added untracked feature."}}
+"#,
+        repo.path().display()
+    );
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--agy"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(repo.commit_count(), 2);
+    assert_eq!(repo.latest_subject(), "add untracked feature");
+    assert_eq!(repo.git(&["status", "--porcelain"]), "");
 
     let _ = fs::remove_dir_all(brain);
 }

@@ -135,9 +135,11 @@ mm --completions nushell
 ## How changes are selected
 
 1. If anything is staged, only staged changes are used.
-2. If nothing is staged, tracked working-tree changes are committed with
-   `git commit -m MSG .`.
-3. Untracked files are ignored unless `--add` is passed.
+2. If nothing is staged, all changes (including untracked files) are
+   automatically staged and committed (default `autoAdd: true`).
+3. If `autoAdd` is disabled in `mm.json` (`"autoAdd": false`), tracked working-tree
+   changes are committed with `git commit -m MSG .`, and untracked files are
+   ignored unless `--add` is passed.
 
 `--staged` disables the fallback in step 2, so an empty index is an error.
 
@@ -178,11 +180,11 @@ Add `mm.json` to the project (or a parent directory up to `$HOME`) to configure 
 }
 ```
 
-- `autoAdd` (boolean, default: `false`): set to `true` (aliases `"add"`, `"autoCommit"`, `"autoStage"`) to automatically stage and commit all changes (including untracked files) when running `mm` without any staged changes. If files are already staged, `mm` commits only the staged changes and leaves unstaged/untracked files untouched:
+- `autoAdd` (boolean, default: `true`): by default, `mm` automatically stages and commits all changes (including untracked files) when running without any staged changes. If files are already staged, `mm` commits only the staged changes and leaves unstaged/untracked files untouched. To disable this and ignore untracked files when nothing is staged, set `"autoAdd": false` (or aliases `"add"`, `"autoCommit"`, `"autoStage"`):
 
 ```json
 {
-  "autoAdd": true
+  "autoAdd": false
 }
 ```
 

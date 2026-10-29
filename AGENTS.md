@@ -34,9 +34,9 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
   behavior in sync with `HELP` in `src/cli.rs`.
 - `config.rs` reads `mm.json` from the current directory upward, stopping at
   `$HOME`. `conventionalCommits` defaults to `true`; setting it to `false`
-  switches generation to plain descriptions. `autoAdd` defaults to `false`;
-  setting it to `true` automatically stages all changes (including untracked files)
-  and commits when no changes are staged. `MessageFormat` in `generate.rs`
+  switches generation to plain descriptions. `autoAdd` defaults to `true`;
+  setting it to `false` disables automatically staging all changes (including untracked files)
+  when no changes are staged. `MessageFormat` in `generate.rs`
   implements the format switch, with `chore` as the fallback type for unknown or mixed
   paths.
 - `conventional.rs` picks types from paths, checking specific categories before
@@ -93,10 +93,11 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
   from changes, adjusting case, stripping full stops, and enforcing length)
   when conventional commits are enabled, while the body copies the assistant
   message intact.
-- Change selection is compatibility behavior: staged changes win; otherwise
-  tracked worktree changes are committed with `.` as a pathspec; untracked files
-  only with `--add`. `--print` must not mutate the repository (`--add` is skipped
-  in print mode).
+- Change selection: staged changes win; otherwise all changes (including untracked
+  files) are automatically staged and committed (default `autoAdd: true`). When `autoAdd`
+  is set to `false`, tracked worktree changes are committed with `.` as a pathspec and
+  untracked files are only included with `--add`. `--print` must not mutate the repository
+  (`--add` is skipped in print mode).
 
 ## Environment gotchas
 

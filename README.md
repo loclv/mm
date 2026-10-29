@@ -93,12 +93,12 @@ for from the current directory upwards, stopping at your home directory):
 Messages then use plain descriptions such as `update README.md`. An explicit
 `--message` prefix is still preserved, and commitlint rules still apply.
 
-To automatically stage all changes (including untracked files) when running `mm`
-without any staged changes, set `"autoAdd": true` in `mm.json`:
+By default, `mm` automatically stages all changes (including untracked files)
+when running without any staged changes. To disable this, set `"autoAdd": false` in `mm.json`:
 
 ```json
 {
-  "autoAdd": true
+  "autoAdd": false
 }
 ```
 

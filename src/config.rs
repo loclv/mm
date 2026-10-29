@@ -3,7 +3,7 @@
 //! Supported settings:
 //! - `conventionalCommits` (boolean, default `true`): generated messages
 //!   follow Conventional Commits unless disabled.
-//! - `autoAdd` (boolean, default `false`): automatically stages all changes
+//! - `autoAdd` (boolean, default `true`): automatically stages all changes
 //!   (including untracked files) when nothing is staged.
 
 use std::fs;
@@ -29,7 +29,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             conventional_commits: true,
-            auto_add: false,
+            auto_add: true,
             source: None,
         }
     }
@@ -123,7 +123,7 @@ fn read_auto_add(object: &serde_json::Map<String, Value>, path: &Path) -> Result
         };
     }
 
-    Ok(false)
+    Ok(true)
 }
 
 #[cfg(test)]
@@ -176,18 +176,18 @@ mod tests {
         let config = load(dir.path()).unwrap();
 
         assert!(config.conventional_commits);
-        assert!(!config.auto_add);
+        assert!(config.auto_add);
         assert_eq!(config.source, None);
     }
 
     #[test]
     fn reads_auto_add_setting() {
         let dir = TempDir::new();
-        dir.write(FILE_NAME, r#"{ "autoAdd": true }"#);
+        dir.write(FILE_NAME, r#"{ "autoAdd": false }"#);
 
         let config = load(dir.path()).unwrap();
 
-        assert!(config.auto_add);
+        assert!(!config.auto_add);
         assert!(config.conventional_commits);
         assert_eq!(config.source, Some(dir.path().join(FILE_NAME)));
     }

@@ -65,9 +65,9 @@ mm - commit with an automatically generated message
 Usage:
   mm [options]
 
-By default, staged changes are used. If nothing is staged, tracked changes in
-the working tree are committed instead (like `git commit .`). Untracked files
-are ignored unless you pass --add.
+By default, staged changes are used. If nothing is staged, all changes (including
+untracked files) are automatically staged and committed. Set {\"autoAdd\": false}
+in `mm.json` to disable auto-staging untracked files, or pass --staged.
 
 A commitlint configuration is detected automatically (JSON, YAML, JavaScript,
 TypeScript, or a `commitlint` field in package.json/package.yaml) and its type,
@@ -75,7 +75,7 @@ scope and length rules are applied to the generated message.
 
 Messages follow Conventional Commits by default. Add `mm.json` with
 {\"conventionalCommits\": false} to generate plain descriptions instead, or
-{\"autoAdd\": true} to automatically stage all changes when none are staged.
+{\"autoAdd\": false} to disable automatically staging all changes when none are staged.
 
 Pass --chat to copy the title and last assistant message from the current
 OpenCode, Antigravity, Claude Code, Codex, or Devin session instead; chat messages are not
