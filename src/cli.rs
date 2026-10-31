@@ -38,18 +38,8 @@ pub struct Options {
     pub message: Option<String>,
     /// Copy the message from an OpenCode or Antigravity chat session.
     pub chat: bool,
-    /// Force copying from OpenCode.
-    pub opencode: bool,
-    /// Force copying from Antigravity.
-    pub antigravity: bool,
-    /// Force copying from Claude Code.
-    pub claude: bool,
-    /// Force copying from Codex.
-    pub codex: bool,
-    /// Force copying from Devin / Codeium.
-    pub devin: bool,
-    /// Force copying from Freebuff / Codebuff.
-    pub freebuff: bool,
+    /// Force copying from a specific assistant instead of auto-detecting.
+    pub agent: Option<chat::Agent>,
     /// Chat session or conversation ID to copy; implies `chat`.
     pub chat_session: Option<String>,
     /// Explicit commitlint configuration file.
@@ -166,73 +156,50 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             }
             "-s" | "--staged" | "--staged-only" => options.staged_only = true,
             "--chat" | "--from-chat" => options.chat = true,
-            "-o" | "--opencode" => {
-                options.chat = true;
-                options.opencode = true;
-            }
-            "--agy" | "--antigravity" => {
-                options.chat = true;
-                options.antigravity = true;
-            }
+            "-o" | "--opencode" => select_agent(&mut options, chat::Agent::OpenCode),
+            "--agy" | "--antigravity" => select_agent(&mut options, chat::Agent::Antigravity),
             "--agy-session" => {
                 index += 1;
                 let value = args
                     .get(index)
                     .ok_or_else(|| format!("`{arg}` requires a value"))?;
-                options.chat = true;
-                options.antigravity = true;
+                select_agent(&mut options, chat::Agent::Antigravity);
                 options.chat_session = Some(value.clone());
             }
-            "--claude" => {
-                options.chat = true;
-                options.claude = true;
-            }
+            "--claude" => select_agent(&mut options, chat::Agent::Claude),
             "--claude-session" => {
                 index += 1;
                 let value = args
                     .get(index)
                     .ok_or_else(|| format!("`{arg}` requires a value"))?;
-                options.chat = true;
-                options.claude = true;
+                select_agent(&mut options, chat::Agent::Claude);
                 options.chat_session = Some(value.clone());
             }
-            "--codex" => {
-                options.chat = true;
-                options.codex = true;
-            }
+            "--codex" => select_agent(&mut options, chat::Agent::Codex),
             "--codex-session" => {
                 index += 1;
                 let value = args
                     .get(index)
                     .ok_or_else(|| format!("`{arg}` requires a value"))?;
-                options.chat = true;
-                options.codex = true;
+                select_agent(&mut options, chat::Agent::Codex);
                 options.chat_session = Some(value.clone());
             }
-            "--devin" | "--codeium" => {
-                options.chat = true;
-                options.devin = true;
-            }
+            "--devin" | "--codeium" => select_agent(&mut options, chat::Agent::Devin),
             "--devin-session" | "--codeium-session" => {
                 index += 1;
                 let value = args
                     .get(index)
                     .ok_or_else(|| format!("`{arg}` requires a value"))?;
-                options.chat = true;
-                options.devin = true;
+                select_agent(&mut options, chat::Agent::Devin);
                 options.chat_session = Some(value.clone());
             }
-            "--freebuff" | "--codebuff" => {
-                options.chat = true;
-                options.freebuff = true;
-            }
+            "--freebuff" | "--codebuff" => select_agent(&mut options, chat::Agent::Freebuff),
             "--freebuff-session" | "--codebuff-session" => {
                 index += 1;
                 let value = args
                     .get(index)
                     .ok_or_else(|| format!("`{arg}` requires a value"))?;
-                options.chat = true;
-                options.freebuff = true;
+                select_agent(&mut options, chat::Agent::Freebuff);
                 options.chat_session = Some(value.clone());
             }
             "--chat-session" => {
@@ -262,38 +229,38 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
                 options.config = Some(PathBuf::from(&arg["--config=".len()..]));
             }
             _ if arg.starts_with("--agy-session=") => {
+                select_agent(&mut options, chat::Agent::Antigravity);
                 options.chat = true;
-                options.antigravity = true;
                 options.chat_session = Some(arg["--agy-session=".len()..].to_string());
             }
             _ if arg.starts_with("--claude-session=") => {
+                select_agent(&mut options, chat::Agent::Claude);
                 options.chat = true;
-                options.claude = true;
                 options.chat_session = Some(arg["--claude-session=".len()..].to_string());
             }
             _ if arg.starts_with("--codex-session=") => {
+                select_agent(&mut options, chat::Agent::Codex);
                 options.chat = true;
-                options.codex = true;
                 options.chat_session = Some(arg["--codex-session=".len()..].to_string());
             }
             _ if arg.starts_with("--devin-session=") => {
+                select_agent(&mut options, chat::Agent::Devin);
                 options.chat = true;
-                options.devin = true;
                 options.chat_session = Some(arg["--devin-session=".len()..].to_string());
             }
             _ if arg.starts_with("--codeium-session=") => {
+                select_agent(&mut options, chat::Agent::Devin);
                 options.chat = true;
-                options.devin = true;
                 options.chat_session = Some(arg["--codeium-session=".len()..].to_string());
             }
             _ if arg.starts_with("--freebuff-session=") => {
+                select_agent(&mut options, chat::Agent::Freebuff);
                 options.chat = true;
-                options.freebuff = true;
                 options.chat_session = Some(arg["--freebuff-session=".len()..].to_string());
             }
             _ if arg.starts_with("--codebuff-session=") => {
+                select_agent(&mut options, chat::Agent::Freebuff);
                 options.chat = true;
-                options.freebuff = true;
                 options.chat_session = Some(arg["--codebuff-session=".len()..].to_string());
             }
             _ if arg.starts_with("--chat-session=") => {
@@ -322,6 +289,12 @@ fn parse_shell(value: &str) -> Result<Shell, String> {
             Shell::NAMES.join(", ")
         )
     })
+}
+
+/// Force copying from a specific assistant chat source, enabling chat mode.
+fn select_agent(options: &mut Options, agent: chat::Agent) {
+    options.chat = true;
+    options.agent = Some(agent);
 }
 
 /// Run the CLI and print any requested output.
@@ -390,12 +363,7 @@ pub fn execute(options: &Options) -> Result<(), String> {
         let chat_result = chat::load(
             options.chat_session.as_deref(),
             Some(git.root()),
-            options.opencode,
-            options.antigravity,
-            options.claude,
-            options.codex,
-            options.devin,
-            options.freebuff,
+            options.agent,
             options.verbose,
         );
 
@@ -584,12 +552,7 @@ mod tests {
                 print_only: true,
                 message: None,
                 chat: false,
-                opencode: false,
-                antigravity: false,
-                claude: false,
-                codex: false,
-                devin: false,
-                freebuff: false,
+                agent: None,
                 chat_session: None,
                 config: None,
                 staged_only: true,
@@ -630,34 +593,27 @@ mod tests {
             })
         );
 
-        assert_eq!(
-            parse_args(&args(&["--agy"])).unwrap(),
-            Command::Run(Options {
-                chat: true,
-                antigravity: true,
-                ..Options::default()
-            })
-        );
-
-        for flag in ["-o", "--opencode"] {
+        for (flag, agent) in [
+            ("-o", chat::Agent::OpenCode),
+            ("--opencode", chat::Agent::OpenCode),
+            ("--antigravity", chat::Agent::Antigravity),
+            ("--agy", chat::Agent::Antigravity),
+            ("--claude", chat::Agent::Claude),
+            ("--codex", chat::Agent::Codex),
+            ("--devin", chat::Agent::Devin),
+            ("--codeium", chat::Agent::Devin),
+            ("--freebuff", chat::Agent::Freebuff),
+            ("--codebuff", chat::Agent::Freebuff),
+        ] {
             assert_eq!(
                 parse_args(&args(&[flag])).unwrap(),
                 Command::Run(Options {
                     chat: true,
-                    opencode: true,
+                    agent: Some(agent),
                     ..Options::default()
                 })
             );
         }
-
-        assert_eq!(
-            parse_args(&args(&["--antigravity"])).unwrap(),
-            Command::Run(Options {
-                chat: true,
-                antigravity: true,
-                ..Options::default()
-            })
-        );
 
         let with_space = parse_args(&args(&["--chat-session", "ses_test"])).unwrap();
         let with_equals = parse_args(&args(&["--chat-session=ses_test"])).unwrap();
@@ -680,7 +636,7 @@ mod tests {
             agy_space,
             Command::Run(Options {
                 chat: true,
-                antigravity: true,
+                agent: Some(chat::Agent::Antigravity),
                 chat_session: Some("conv_test".to_string()),
                 ..Options::default()
             })
@@ -690,7 +646,7 @@ mod tests {
             parse_args(&args(&["--claude"])).unwrap(),
             Command::Run(Options {
                 chat: true,
-                claude: true,
+                agent: Some(chat::Agent::Claude),
                 ..Options::default()
             })
         );
@@ -703,7 +659,7 @@ mod tests {
             claude_space,
             Command::Run(Options {
                 chat: true,
-                claude: true,
+                agent: Some(chat::Agent::Claude),
                 chat_session: Some("claude_test".to_string()),
                 ..Options::default()
             })
@@ -713,7 +669,7 @@ mod tests {
             parse_args(&args(&["--codex"])).unwrap(),
             Command::Run(Options {
                 chat: true,
-                codex: true,
+                agent: Some(chat::Agent::Codex),
                 ..Options::default()
             })
         );
@@ -726,7 +682,7 @@ mod tests {
             codex_space,
             Command::Run(Options {
                 chat: true,
-                codex: true,
+                agent: Some(chat::Agent::Codex),
                 chat_session: Some("codex_test".to_string()),
                 ..Options::default()
             })
@@ -736,7 +692,7 @@ mod tests {
             parse_args(&args(&["--devin"])).unwrap(),
             Command::Run(Options {
                 chat: true,
-                devin: true,
+                agent: Some(chat::Agent::Devin),
                 ..Options::default()
             })
         );
@@ -745,7 +701,7 @@ mod tests {
             parse_args(&args(&["--codeium"])).unwrap(),
             Command::Run(Options {
                 chat: true,
-                devin: true,
+                agent: Some(chat::Agent::Devin),
                 ..Options::default()
             })
         );
@@ -757,7 +713,7 @@ mod tests {
             devin_space,
             Command::Run(Options {
                 chat: true,
-                devin: true,
+                agent: Some(chat::Agent::Devin),
                 chat_session: Some("devin_test".to_string()),
                 ..Options::default()
             })
@@ -768,7 +724,7 @@ mod tests {
             codeium_equals,
             Command::Run(Options {
                 chat: true,
-                devin: true,
+                agent: Some(chat::Agent::Devin),
                 chat_session: Some("codeium_test".to_string()),
                 ..Options::default()
             })
@@ -778,7 +734,7 @@ mod tests {
             parse_args(&args(&["--freebuff"])).unwrap(),
             Command::Run(Options {
                 chat: true,
-                freebuff: true,
+                agent: Some(chat::Agent::Freebuff),
                 ..Options::default()
             })
         );
@@ -787,7 +743,7 @@ mod tests {
             parse_args(&args(&["--codebuff"])).unwrap(),
             Command::Run(Options {
                 chat: true,
-                freebuff: true,
+                agent: Some(chat::Agent::Freebuff),
                 ..Options::default()
             })
         );
@@ -799,7 +755,7 @@ mod tests {
             freebuff_space,
             Command::Run(Options {
                 chat: true,
-                freebuff: true,
+                agent: Some(chat::Agent::Freebuff),
                 chat_session: Some("freebuff_test".to_string()),
                 ..Options::default()
             })
@@ -810,7 +766,7 @@ mod tests {
             codebuff_equals,
             Command::Run(Options {
                 chat: true,
-                freebuff: true,
+                agent: Some(chat::Agent::Freebuff),
                 chat_session: Some("codebuff_test".to_string()),
                 ..Options::default()
             })

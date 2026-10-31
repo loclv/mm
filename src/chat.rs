@@ -80,6 +80,126 @@ pub enum SubjectSource {
     LastMessage,
 }
 
+/// A chat source that `mm` can copy a commit message from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Agent {
+    OpenCode,
+    Antigravity,
+    Claude,
+    Codex,
+    Devin,
+    Freebuff,
+}
+
+impl Agent {
+    /// Agents with readable transcripts on disk, checked when resolving a
+    /// session ID. OpenCode is the final fallback because it exports on demand.
+    const SESSION_ORDER: [Agent; 5] = [
+        Agent::Freebuff,
+        Agent::Devin,
+        Agent::Claude,
+        Agent::Antigravity,
+        Agent::Codex,
+    ];
+
+    /// Agents checked for an environment-selected session. OpenCode comes first
+    /// to match its own `OPENCODE_SESSION_ID` convention.
+    const ENV_ORDER: [Agent; 6] = [
+        Agent::OpenCode,
+        Agent::Freebuff,
+        Agent::Devin,
+        Agent::Claude,
+        Agent::Antigravity,
+        Agent::Codex,
+    ];
+
+    /// Agents that keep transcripts on disk, in auto-detection order.
+    const LOCAL: [Agent; 5] = [
+        Agent::Antigravity,
+        Agent::Claude,
+        Agent::Codex,
+        Agent::Devin,
+        Agent::Freebuff,
+    ];
+
+    /// Human-readable name used in diagnostics and errors.
+    pub fn label(self) -> &'static str {
+        match self {
+            Agent::OpenCode => "OpenCode",
+            Agent::Antigravity => "Antigravity",
+            Agent::Claude => "Claude Code",
+            Agent::Codex => "Codex",
+            Agent::Devin => "Devin",
+            Agent::Freebuff => "Freebuff",
+        }
+    }
+
+    /// Environment variables that select a session for this agent.
+    fn session_envs(self) -> &'static [&'static str] {
+        match self {
+            Agent::OpenCode => &[SESSION_ENV],
+            Agent::Antigravity => &[ANTIGRAVITY_SESSION_ENV, "GEMINI_CONVERSATION_ID"],
+            Agent::Claude => &[CLAUDE_SESSION_ENV],
+            Agent::Codex => &[CODEX_SESSION_ENV],
+            Agent::Devin => &[DEVIN_SESSION_ENV],
+            Agent::Freebuff => &[FREEBUFF_SESSION_ENV, CODEBUFF_SESSION_ENV],
+        }
+    }
+
+    /// Resolve an explicit session ID or transcript path.
+    fn resolve(self, session: &str, repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+        match self {
+            Agent::OpenCode => None,
+            Agent::Antigravity => resolve_antigravity_session(session),
+            Agent::Claude => resolve_claude_session(session),
+            Agent::Codex => resolve_codex_session(session),
+            Agent::Devin => resolve_devin_session(session),
+            Agent::Freebuff => resolve_freebuff_session(session, repo_root),
+        }
+    }
+
+    /// Find the most recently modified transcript on disk.
+    fn find_latest(self, repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+        match self {
+            Agent::OpenCode => None,
+            Agent::Antigravity => find_latest_antigravity_log(repo_root),
+            Agent::Claude => find_latest_claude_log(repo_root),
+            Agent::Codex => find_latest_codex_log(repo_root),
+            Agent::Devin => find_latest_devin_log(repo_root),
+            Agent::Freebuff => find_latest_freebuff_log(repo_root),
+        }
+    }
+
+    /// Parse a transcript found on disk.
+    fn parse(
+        self,
+        path: &Path,
+        session_id: &str,
+        repo_root: Option<&Path>,
+    ) -> Result<ChatMessage, String> {
+        match self {
+            Agent::Antigravity => load_antigravity(path, session_id, repo_root),
+            Agent::Claude => load_claude(path, session_id, repo_root),
+            Agent::Codex => load_codex(path, session_id, repo_root),
+            Agent::Devin => load_devin(path, session_id, repo_root),
+            Agent::Freebuff => load_freebuff(path, session_id, repo_root),
+            Agent::OpenCode => {
+                Err("OpenCode sessions are exported, not read from disk".to_string())
+            }
+        }
+    }
+
+    /// Return the first session ID from the agent's environment variables, if
+    /// any is set (an explicitly empty value is kept so callers can reject it).
+    fn env_session(self) -> Option<String> {
+        self.session_envs().iter().find_map(|key| {
+            std::env::var(key)
+                .ok()
+                .map(|value| value.trim().to_string())
+        })
+    }
+}
+
 /// A commit message copied from an OpenCode or Antigravity session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ChatMessage {
@@ -3547,426 +3667,162 @@ pub fn load_freebuff(
 /// Load and parse a session export or conversation log.
 ///
 /// Sources supported:
-/// - Explicit OpenCode session via `force_opencode` or `session`.
-/// - Explicit Freebuff / Codebuff session via `force_freebuff` or `session`.
-/// - Explicit Devin / Codeium session via `force_devin` or `session`.
-/// - Explicit Codex session via `force_codex` or `session`.
-/// - Explicit Claude Code session via `force_claude` or `session`.
-/// - Explicit Antigravity conversation or OpenCode session via `session`.
-/// - `OPENCODE_SESSION_ID` environment variable.
-/// - `CLAUDE_SESSION_ID` environment variable.
-/// - `ANTIGRAVITY_CONVERSATION_ID` environment variable.
-/// - `CODEX_SESSION_ID` environment variable.
-/// - `DEVIN_SESSION_ID` environment variable.
-/// - `FREEBUFF_SESSION_ID` / `CODEBUFF_SESSION_ID` environment variable.
-/// - Auto-detection of the latest conversation log across Antigravity, Claude Code, Codex, Devin, and Freebuff.
-#[allow(clippy::too_many_arguments)]
+/// - An explicit `agent` (for example from `--opencode`).
+/// - Explicit sessions via `session` and environment variables.
+/// - Auto-detection of the latest local transcript across Antigravity, Claude
+///   Code, Codex, Devin, and Freebuff.
 pub fn load(
     session: Option<&str>,
     repo_root: Option<&Path>,
-    force_opencode: bool,
-    force_antigravity: bool,
-    force_claude: bool,
-    force_codex: bool,
-    force_devin: bool,
-    force_freebuff: bool,
+    agent: Option<Agent>,
     verbose: bool,
 ) -> Result<ChatMessage, String> {
-    let mut chat = load_raw(
-        session,
-        repo_root,
-        force_opencode,
-        force_antigravity,
-        force_claude,
-        force_codex,
-        force_devin,
-        force_freebuff,
-        verbose,
-    )?;
+    let mut chat = load_raw(session, repo_root, agent, verbose)?;
     chat.subject = sanitize_current_path(&chat.subject, repo_root);
     chat.body = sanitize_chat_body(&chat.body, repo_root);
     Ok(chat)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn load_raw(
     session: Option<&str>,
     repo_root: Option<&Path>,
-    force_opencode: bool,
-    force_antigravity: bool,
-    force_claude: bool,
-    force_codex: bool,
-    force_devin: bool,
-    force_freebuff: bool,
+    agent: Option<Agent>,
     verbose: bool,
 ) -> Result<ChatMessage, String> {
-    let trimmed_session = session.map(str::trim).filter(|value| !value.is_empty());
+    let session = session.map(str::trim).filter(|value| !value.is_empty());
 
-    if force_opencode {
-        let sess = if let Some(sess) = trimmed_session {
-            sess.to_string()
-        } else {
-            std::env::var(SESSION_ENV)
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| {
-                    format!(
-                        "no OpenCode session selected; set {SESSION_ENV} or pass --chat-session <ID>"
-                    )
-                })?
-        };
-
-        if verbose {
-            eprintln!("[mm] chat: exporting OpenCode session {sess}");
-        }
-
-        let export = export_session(&sess)?;
-        return parse_with_root(&export, &sess, repo_root);
+    if let Some(agent) = agent {
+        return load_agent(agent, session, repo_root, verbose);
     }
 
-    if force_freebuff {
-        let (id, path) = if let Some(sess) = trimmed_session {
-            resolve_freebuff_session(sess, repo_root)
-                .ok_or_else(|| format!("could not find Freebuff session or transcript `{sess}`"))?
-        } else if let Some((id, path)) = std::env::var(FREEBUFF_SESSION_ENV)
-            .or_else(|_| std::env::var(CODEBUFF_SESSION_ENV))
-            .ok()
-            .and_then(|sess| {
-                let s = sess.trim();
-                if s.is_empty() {
-                    None
-                } else {
-                    resolve_freebuff_session(s, repo_root)
-                }
-            })
+    if let Some(sess) = session {
+        for agent in Agent::SESSION_ORDER {
+            if let Some((id, path)) = agent.resolve(sess, repo_root) {
+                announce(agent, &id, &path, verbose);
+                return agent.parse(&path, &id, repo_root);
+            }
+        }
+
+        return load_opencode(Some(sess), repo_root, verbose);
+    }
+
+    for agent in Agent::ENV_ORDER {
+        if agent == Agent::OpenCode {
+            if let Some(sess) = agent.env_session() {
+                return load_opencode(Some(&sess), repo_root, verbose);
+            }
+            continue;
+        }
+
+        if let Some((id, path)) = agent
+            .env_session()
+            .and_then(|sess| agent.resolve(&sess, repo_root))
         {
-            (id, path)
-        } else {
-            find_latest_freebuff_log(repo_root)
-                .ok_or_else(|| "no Freebuff session log found".to_string())?
-        };
-
-        if verbose {
-            eprintln!("[mm] chat: using Freebuff log {} ({})", id, path.display());
+            announce(agent, &id, &path, verbose);
+            return agent.parse(&path, &id, repo_root);
         }
-
-        return load_freebuff(&path, &id, repo_root);
     }
 
-    if force_devin {
-        let (id, path) = if let Some(sess) = trimmed_session {
-            resolve_devin_session(sess)
-                .ok_or_else(|| format!("could not find Devin session or transcript `{sess}`"))?
-        } else if let Some((id, path)) = std::env::var(DEVIN_SESSION_ENV).ok().and_then(|sess| {
-            let s = sess.trim();
-            if s.is_empty() {
-                None
-            } else {
-                resolve_devin_session(s)
-            }
-        }) {
-            (id, path)
-        } else {
-            find_latest_devin_log(repo_root)
-                .ok_or_else(|| "no Devin session log found".to_string())?
-        };
+    let mut candidates: Vec<(SystemTime, Agent, String, PathBuf)> = Agent::LOCAL
+        .into_iter()
+        .filter_map(|agent| {
+            let (id, path) = agent.find_latest(repo_root)?;
+            let mtime = fs::metadata(&path)
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH);
+            Some((mtime, agent, id, path))
+        })
+        .collect();
 
-        if verbose {
-            eprintln!("[mm] chat: using Devin log {} ({})", id, path.display());
-        }
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
 
-        return load_devin(&path, &id, repo_root);
-    }
-
-    if force_codex {
-        let (id, path) = if let Some(sess) = trimmed_session {
-            resolve_codex_session(sess)
-                .ok_or_else(|| format!("could not find Codex session or transcript `{sess}`"))?
-        } else if let Some((id, path)) = std::env::var(CODEX_SESSION_ENV).ok().and_then(|sess| {
-            let s = sess.trim();
-            if s.is_empty() {
-                None
-            } else {
-                resolve_codex_session(s)
-            }
-        }) {
-            (id, path)
-        } else {
-            find_latest_codex_log(repo_root)
-                .ok_or_else(|| "no Codex session log found".to_string())?
-        };
-
-        if verbose {
-            eprintln!("[mm] chat: using Codex log {} ({})", id, path.display());
-        }
-
-        return load_codex(&path, &id, repo_root);
-    }
-
-    if force_claude {
-        let (id, path) = if let Some(sess) = trimmed_session {
-            resolve_claude_session(sess).ok_or_else(|| {
-                format!("could not find Claude Code session or transcript `{sess}`")
-            })?
-        } else if let Some((id, path)) = std::env::var(CLAUDE_SESSION_ENV).ok().and_then(|sess| {
-            let s = sess.trim();
-            if s.is_empty() {
-                None
-            } else {
-                resolve_claude_session(s)
-            }
-        }) {
-            (id, path)
-        } else {
-            find_latest_claude_log(repo_root)
-                .ok_or_else(|| "no Claude Code session log found".to_string())?
-        };
-
+    if let Some((_, agent, id, path)) = candidates.into_iter().next() {
         if verbose {
             eprintln!(
-                "[mm] chat: using Claude Code log {} ({})",
+                "[mm] chat: auto-detected {} log {} ({})",
+                agent.label(),
                 id,
                 path.display()
             );
         }
-
-        return load_claude(&path, &id, repo_root);
-    }
-
-    if force_antigravity {
-        let (id, path) = if let Some(sess) = trimmed_session {
-            resolve_antigravity_session(sess).ok_or_else(|| {
-                format!("could not find Antigravity conversation or transcript `{sess}`")
-            })?
-        } else if let Some((id, path)) = std::env::var(ANTIGRAVITY_SESSION_ENV)
-            .or_else(|_| std::env::var("GEMINI_CONVERSATION_ID"))
-            .ok()
-            .and_then(|sess| {
-                let s = sess.trim();
-                if s.is_empty() {
-                    None
-                } else {
-                    resolve_antigravity_session(s)
-                }
-            })
-        {
-            (id, path)
-        } else {
-            find_latest_antigravity_log(repo_root)
-                .ok_or_else(|| "no Antigravity conversation log found".to_string())?
-        };
-
-        if verbose {
-            eprintln!(
-                "[mm] chat: using Antigravity log {} ({})",
-                id,
-                path.display()
-            );
-        }
-
-        return load_antigravity(&path, &id, repo_root);
-    }
-
-    if let Some(sess) = trimmed_session {
-        if let Some((id, path)) = resolve_freebuff_session(sess, repo_root) {
-            if verbose {
-                eprintln!("[mm] chat: using Freebuff log {} ({})", id, path.display());
-            }
-            return load_freebuff(&path, &id, repo_root);
-        }
-
-        if let Some((id, path)) = resolve_devin_session(sess) {
-            if verbose {
-                eprintln!("[mm] chat: using Devin log {} ({})", id, path.display());
-            }
-            return load_devin(&path, &id, repo_root);
-        }
-
-        if let Some((id, path)) = resolve_claude_session(sess) {
-            if verbose {
-                eprintln!(
-                    "[mm] chat: using Claude Code log {} ({})",
-                    id,
-                    path.display()
-                );
-            }
-            return load_claude(&path, &id, repo_root);
-        }
-
-        if let Some((id, path)) = resolve_antigravity_session(sess) {
-            if verbose {
-                eprintln!(
-                    "[mm] chat: using Antigravity log {} ({})",
-                    id,
-                    path.display()
-                );
-            }
-            return load_antigravity(&path, &id, repo_root);
-        }
-
-        if let Some((id, path)) = resolve_codex_session(sess) {
-            if verbose {
-                eprintln!("[mm] chat: using Codex log {} ({})", id, path.display());
-            }
-            return load_codex(&path, &id, repo_root);
-        }
-
-        if verbose {
-            eprintln!("[mm] chat: exporting OpenCode session {sess}");
-        }
-
-        let export = export_session(sess)?;
-        return parse_with_root(&export, sess, repo_root);
-    }
-
-    if let Ok(opencode_session) = std::env::var(SESSION_ENV) {
-        let sess = opencode_session.trim();
-        if !sess.is_empty() {
-            if verbose {
-                eprintln!("[mm] chat: exporting OpenCode session {sess}");
-            }
-
-            let export = export_session(sess)?;
-            return parse_with_root(&export, sess, repo_root);
-        }
-        return Err(format!(
-            "no OpenCode session selected; set {SESSION_ENV} or pass --chat-session <ID>"
-        ));
-    }
-
-    if let Ok(freebuff_session) =
-        std::env::var(FREEBUFF_SESSION_ENV).or_else(|_| std::env::var(CODEBUFF_SESSION_ENV))
-    {
-        let sess = freebuff_session.trim();
-        if !sess.is_empty()
-            && let Some((id, path)) = resolve_freebuff_session(sess, repo_root)
-        {
-            if verbose {
-                eprintln!("[mm] chat: using Freebuff log {} ({})", id, path.display());
-            }
-            return load_freebuff(&path, &id, repo_root);
-        }
-    }
-
-    if let Ok(devin_session) = std::env::var(DEVIN_SESSION_ENV) {
-        let sess = devin_session.trim();
-        if !sess.is_empty()
-            && let Some((id, path)) = resolve_devin_session(sess)
-        {
-            if verbose {
-                eprintln!("[mm] chat: using Devin log {} ({})", id, path.display());
-            }
-            return load_devin(&path, &id, repo_root);
-        }
-    }
-
-    if let Ok(claude_session) = std::env::var(CLAUDE_SESSION_ENV) {
-        let sess = claude_session.trim();
-        if !sess.is_empty()
-            && let Some((id, path)) = resolve_claude_session(sess)
-        {
-            if verbose {
-                eprintln!(
-                    "[mm] chat: using Claude Code log {} ({})",
-                    id,
-                    path.display()
-                );
-            }
-            return load_claude(&path, &id, repo_root);
-        }
-    }
-
-    if let Ok(agy_session) =
-        std::env::var(ANTIGRAVITY_SESSION_ENV).or_else(|_| std::env::var("GEMINI_CONVERSATION_ID"))
-    {
-        let sess = agy_session.trim();
-        let resolved = if !sess.is_empty() {
-            resolve_antigravity_session(sess)
-        } else {
-            None
-        };
-        if let Some((id, path)) = resolved {
-            if verbose {
-                eprintln!(
-                    "[mm] chat: using Antigravity log {} ({})",
-                    id,
-                    path.display()
-                );
-            }
-            return load_antigravity(&path, &id, repo_root);
-        }
-    }
-
-    if let Ok(codex_session) = std::env::var(CODEX_SESSION_ENV) {
-        let sess = codex_session.trim();
-        if !sess.is_empty()
-            && let Some((id, path)) = resolve_codex_session(sess)
-        {
-            if verbose {
-                eprintln!("[mm] chat: using Codex log {} ({})", id, path.display());
-            }
-            return load_codex(&path, &id, repo_root);
-        }
-    }
-
-    // Auto-detect between Antigravity, Claude Code, Codex, Devin, and Freebuff logs by latest modified time
-    let mut local_candidates: Vec<(SystemTime, String, PathBuf, &'static str)> = Vec::new();
-
-    if let Some((id, path)) = find_latest_antigravity_log(repo_root) {
-        let mtime = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .unwrap_or(UNIX_EPOCH);
-        local_candidates.push((mtime, id, path, "Antigravity"));
-    }
-    if let Some((id, path)) = find_latest_claude_log(repo_root) {
-        let mtime = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .unwrap_or(UNIX_EPOCH);
-        local_candidates.push((mtime, id, path, "Claude Code"));
-    }
-    if let Some((id, path)) = find_latest_codex_log(repo_root) {
-        let mtime = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .unwrap_or(UNIX_EPOCH);
-        local_candidates.push((mtime, id, path, "Codex"));
-    }
-    if let Some((id, path)) = find_latest_devin_log(repo_root) {
-        let mtime = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .unwrap_or(UNIX_EPOCH);
-        local_candidates.push((mtime, id, path, "Devin"));
-    }
-    if let Some((id, path)) = find_latest_freebuff_log(repo_root) {
-        let mtime = fs::metadata(&path)
-            .and_then(|m| m.modified())
-            .unwrap_or(UNIX_EPOCH);
-        local_candidates.push((mtime, id, path, "Freebuff"));
-    }
-
-    local_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
-
-    if let Some((_, id, path, tool)) = local_candidates.into_iter().next() {
-        if verbose {
-            eprintln!(
-                "[mm] chat: auto-detected {tool} log {} ({})",
-                id,
-                path.display()
-            );
-        }
-        return match tool {
-            "Antigravity" => load_antigravity(&path, &id, repo_root),
-            "Claude Code" => load_claude(&path, &id, repo_root),
-            "Codex" => load_codex(&path, &id, repo_root),
-            "Devin" => load_devin(&path, &id, repo_root),
-            "Freebuff" => load_freebuff(&path, &id, repo_root),
-            _ => unreachable!(),
-        };
+        return agent.parse(&path, &id, repo_root);
     }
 
     Err(format!(
         "no OpenCode session, Antigravity log, Claude Code session, Codex session, Devin log, or Freebuff session found; set {SESSION_ENV}, {ANTIGRAVITY_SESSION_ENV}, {CLAUDE_SESSION_ENV}, {CODEX_SESSION_ENV}, {DEVIN_SESSION_ENV}, {FREEBUFF_SESSION_ENV}, or pass --chat-session <ID>"
     ))
+}
+
+/// Load from a specific agent, whether forced by a flag or selected by default.
+fn load_agent(
+    agent: Agent,
+    session: Option<&str>,
+    repo_root: Option<&Path>,
+    verbose: bool,
+) -> Result<ChatMessage, String> {
+    if agent == Agent::OpenCode {
+        return load_opencode(session, repo_root, verbose);
+    }
+
+    let (id, path) = if let Some(sess) = session {
+        agent.resolve(sess, repo_root).ok_or_else(|| {
+            format!(
+                "could not find {} session or transcript `{sess}`",
+                agent.label()
+            )
+        })?
+    } else if let Some(resolved) = agent
+        .env_session()
+        .and_then(|sess| agent.resolve(&sess, repo_root))
+    {
+        resolved
+    } else {
+        agent
+            .find_latest(repo_root)
+            .ok_or_else(|| format!("no {} session log found", agent.label()))?
+    };
+
+    announce(agent, &id, &path, verbose);
+    agent.parse(&path, &id, repo_root)
+}
+
+/// Load the current OpenCode session through `opencode session export`.
+fn load_opencode(
+    session: Option<&str>,
+    repo_root: Option<&Path>,
+    verbose: bool,
+) -> Result<ChatMessage, String> {
+    let session = match session {
+        Some(session) => session.to_string(),
+        None => Agent::OpenCode.env_session().ok_or_else(|| {
+            format!("no OpenCode session selected; set {SESSION_ENV} or pass --chat-session <ID>")
+        })?,
+    };
+
+    if session.trim().is_empty() {
+        return Err(format!(
+            "no OpenCode session selected; set {SESSION_ENV} or pass --chat-session <ID>"
+        ));
+    }
+
+    if verbose {
+        eprintln!("[mm] chat: exporting OpenCode session {session}");
+    }
+
+    let export = export_session(&session)?;
+    parse_with_root(&export, &session, repo_root)
+}
+
+/// Report which local transcript is being copied in verbose mode.
+fn announce(agent: Agent, session_id: &str, path: &Path, verbose: bool) {
+    if verbose {
+        eprintln!(
+            "[mm] chat: using {} log {} ({})",
+            agent.label(),
+            session_id,
+            path.display()
+        );
+    }
 }
 
 /// Export a session to a temporary file.
