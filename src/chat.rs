@@ -3547,6 +3547,7 @@ pub fn load_freebuff(
 /// Load and parse a session export or conversation log.
 ///
 /// Sources supported:
+/// - Explicit OpenCode session via `force_opencode` or `session`.
 /// - Explicit Freebuff / Codebuff session via `force_freebuff` or `session`.
 /// - Explicit Devin / Codeium session via `force_devin` or `session`.
 /// - Explicit Codex session via `force_codex` or `session`.
@@ -3563,6 +3564,7 @@ pub fn load_freebuff(
 pub fn load(
     session: Option<&str>,
     repo_root: Option<&Path>,
+    force_opencode: bool,
     force_antigravity: bool,
     force_claude: bool,
     force_codex: bool,
@@ -3573,6 +3575,7 @@ pub fn load(
     let mut chat = load_raw(
         session,
         repo_root,
+        force_opencode,
         force_antigravity,
         force_claude,
         force_codex,
@@ -3589,6 +3592,7 @@ pub fn load(
 fn load_raw(
     session: Option<&str>,
     repo_root: Option<&Path>,
+    force_opencode: bool,
     force_antigravity: bool,
     force_claude: bool,
     force_codex: bool,
@@ -3597,6 +3601,29 @@ fn load_raw(
     verbose: bool,
 ) -> Result<ChatMessage, String> {
     let trimmed_session = session.map(str::trim).filter(|value| !value.is_empty());
+
+    if force_opencode {
+        let sess = if let Some(sess) = trimmed_session {
+            sess.to_string()
+        } else {
+            std::env::var(SESSION_ENV)
+                .ok()
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| {
+                    format!(
+                        "no OpenCode session selected; set {SESSION_ENV} or pass --chat-session <ID>"
+                    )
+                })?
+        };
+
+        if verbose {
+            eprintln!("[mm] chat: exporting OpenCode session {sess}");
+        }
+
+        let export = export_session(&sess)?;
+        return parse_with_root(&export, &sess, repo_root);
+    }
 
     if force_freebuff {
         let (id, path) = if let Some(sess) = trimmed_session {

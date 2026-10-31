@@ -72,7 +72,7 @@ _mm() {
 
     local opts="\
 -a --add -e --edit -p --print -d --dry-run \
--m --message --chat --chat-session --agy --antigravity --agy-session \
+-m --message --chat --chat-session -o --opencode --agy --antigravity --agy-session \
 --claude --claude-session --codex --codex-session \
 --devin --codeium --devin-session --codeium-session \
 --freebuff --codebuff --freebuff-session --codebuff-session \
@@ -100,6 +100,7 @@ _mm() {
     '(-m --message)'{-m,--message}'[Merge the description with an existing message]:message:' \
     '--chat[Copy the chat title and last assistant message]' \
     '--chat-session[Use a specific session ID or transcript path]:session:_files' \
+    '(-o --opencode)'{-o,--opencode}'[Copy the OpenCode session title and last message]' \
     '--agy[Copy the Antigravity last log commit message]' \
     '--antigravity[Copy the Antigravity last log commit message]' \
     '--agy-session[Use a specific Antigravity conversation]:conversation:_files' \
@@ -142,6 +143,7 @@ complete -c mm -s d -l dry-run -d 'Alias for --print'
 complete -c mm -s m -l message -r -d 'Merge the description with an existing message'
 complete -c mm -l chat -d 'Copy the chat title and last assistant message'
 complete -c mm -l chat-session -r -F -d 'Use a specific session ID or transcript path'
+complete -c mm -s o -l opencode -d 'Copy the OpenCode session title and last message'
 complete -c mm -l agy -d 'Copy the Antigravity last log commit message'
 complete -c mm -l antigravity -d 'Copy the Antigravity last log commit message'
 complete -c mm -l agy-session -r -F -d 'Use a specific Antigravity conversation'

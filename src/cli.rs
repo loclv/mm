@@ -38,6 +38,8 @@ pub struct Options {
     pub message: Option<String>,
     /// Copy the message from an OpenCode or Antigravity chat session.
     pub chat: bool,
+    /// Force copying from OpenCode.
+    pub opencode: bool,
     /// Force copying from Antigravity.
     pub antigravity: bool,
     /// Force copying from Claude Code.
@@ -83,9 +85,9 @@ Pass --chat to copy the title and last assistant message from the current
 OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff session instead; chat messages are not
 reshaped by commitlint. If copying from chat fails, mm automatically falls back
 to auto commit message generation. Use --chat-session <ID> to select a different
-session, --agy to copy from Antigravity, --claude to copy from Claude Code, --codex
-to copy from Codex, --devin to copy from Devin / Codeium, or --freebuff to copy from
-Freebuff / Codebuff.
+session, --opencode to copy from OpenCode, --agy to copy from Antigravity, --claude
+to copy from Claude Code, --codex to copy from Codex, --devin to copy from
+Devin / Codeium, or --freebuff to copy from Freebuff / Codebuff.
 
 Options:
       --completions <SHELL> # Print a completion script for bash, zsh, or fish
@@ -96,6 +98,7 @@ Options:
   -m, --message <MSG> # Merge the generated description (or override a chat subject)
       --chat # Copy the chat title and last message (OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff)
       --chat-session <ID> # Use a specific session ID or transcript path (implies --chat)
+      -o, --opencode # Copy the OpenCode session title and last message (implies --chat)
       --agy, --antigravity # Copy the Antigravity last log commit message (implies --chat)
       --agy-session <ID> # Use a specific Antigravity conversation (implies --agy)
       --claude # Copy the Claude Code last log commit message (implies --chat)
@@ -119,6 +122,7 @@ Examples:
   mm --print # Show the message without committing
   mm --add # Include new files, then commit
   mm --chat --print # Preview the message copied from the current chat
+  mm --opencode --print # Preview the message copied from OpenCode
   mm --agy --print # Preview the message copied from Antigravity's last log
   mm --claude --print # Preview the message copied from Claude Code's last log
   mm --codex --print # Preview the message copied from Codex's last log
@@ -162,6 +166,10 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             }
             "-s" | "--staged" | "--staged-only" => options.staged_only = true,
             "--chat" | "--from-chat" => options.chat = true,
+            "-o" | "--opencode" => {
+                options.chat = true;
+                options.opencode = true;
+            }
             "--agy" | "--antigravity" => {
                 options.chat = true;
                 options.antigravity = true;
@@ -382,6 +390,7 @@ pub fn execute(options: &Options) -> Result<(), String> {
         let chat_result = chat::load(
             options.chat_session.as_deref(),
             Some(git.root()),
+            options.opencode,
             options.antigravity,
             options.claude,
             options.codex,
@@ -575,6 +584,7 @@ mod tests {
                 print_only: true,
                 message: None,
                 chat: false,
+                opencode: false,
                 antigravity: false,
                 claude: false,
                 codex: false,
@@ -628,6 +638,17 @@ mod tests {
                 ..Options::default()
             })
         );
+
+        for flag in ["-o", "--opencode"] {
+            assert_eq!(
+                parse_args(&args(&[flag])).unwrap(),
+                Command::Run(Options {
+                    chat: true,
+                    opencode: true,
+                    ..Options::default()
+                })
+            );
+        }
 
         assert_eq!(
             parse_args(&args(&["--antigravity"])).unwrap(),

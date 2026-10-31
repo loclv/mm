@@ -86,6 +86,7 @@ mm # generate and commit
 | `-m`, `--message <MSG>` | Merge the generated description with an existing message, or override the chat subject |
 | `--chat` | Copy the chat title and last message (OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff) |
 | `--chat-session <ID>` | Use a specific session ID or transcript path; implies `--chat` |
+| `-o`, `--opencode` | Copy the OpenCode session title and last message; implies `--chat` |
 | `--agy`, `--antigravity` | Copy the Antigravity last log commit message; implies `--chat` |
 | `--agy-session <ID>` | Use a specific Antigravity conversation or transcript; implies `--agy` |
 | `--claude` | Copy the Claude Code last log commit message; implies `--chat` |
@@ -202,7 +203,7 @@ unrelated: it overrides the commitlint configuration file.
 
 `mm` can extract the commit message directly from local assistant chats:
 
-- OpenCode: OpenCode exports sessions using its `opencode` CLI. When `mm` runs inside an OpenCode session, `OPENCODE_SESSION_ID` identifies the current chat.
+- OpenCode: OpenCode exports sessions using its `opencode` CLI. When `mm` runs inside an OpenCode session, `OPENCODE_SESSION_ID` identifies the current chat. Pass `--opencode` / `-o` to force OpenCode when other assistant logs are also present.
 - Antigravity: Antigravity saves conversation transcripts in `~/.gemini/antigravity-ide/brain/<ID>/.system_generated/logs/transcript.jsonl`. When running inside Antigravity (or when `ANTIGRAVITY_CONVERSATION_ID` is set), or via `--agy`, `mm` reads the conversation log.
 - Claude Code: Claude Code saves session transcripts in `~/.claude/projects/<encoded-project-path>/<session-id>.jsonl` (or under `CLAUDE_CONFIG_DIR`). When running inside Claude Code (or when `CLAUDE_SESSION_ID` is set), or via `--claude`, `mm` reads the session log.
 - Codex: OpenAI Codex saves session transcripts in `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl.zst` (or `.jsonl`, under `CODEX_HOME`). When running inside Codex (or when `CODEX_SESSION_ID` is set), or via `--codex`, `mm` reads the session log.
@@ -211,6 +212,7 @@ unrelated: it overrides the commitlint configuration file.
 
 ```sh
 mm --chat --print # preview copied message (auto-detects OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff)
+mm --opencode --print # preview message from the current OpenCode session
 mm --agy --print # preview message from the latest Antigravity log
 mm --claude --print # preview message from the latest Claude Code log
 mm --codex --print # preview message from the latest Codex log
@@ -229,6 +231,7 @@ The message is built like this:
   - For Devin / Codeium, the session title is used if available; otherwise the first line of the latest user prompt is used, truncated to 72 characters. If absent, the first line of the assistant message is used.
   - For Freebuff / Codebuff, the first user prompt (or session title from `chat-meta.json` if available) is used, truncated to 72 characters. If absent, the first line of the assistant message is used.
 - Body: The last assistant response (`PLANNER_RESPONSE`, Claude Code text message, Codex assistant message/task completion, Devin assistant message, Freebuff assistant message, or OpenCode assistant text message). Tool calls, reasoning/thinking, and metadata are excluded.
+- `--opencode` or `-o` forces copying from OpenCode (`OPENCODE_SESSION_ID`, or a session passed with `--chat-session`).
 - `--agy` or `--antigravity` forces copying from Antigravity logs.
 - `--claude` forces copying from Claude Code logs.
 - `--codex` forces copying from Codex logs.
@@ -239,7 +242,7 @@ The message is built like this:
 - Privacy and path sanitization: Absolute user file links (such as `file:///Users/user/...` or `file:///home/user/...`) copied from chat logs are automatically replaced with `~/...` to prevent leaking local user names in commit messages. Paths referring to the current repository directory (such as `~/w/auto-commit/rust/` or `file:///.../rust/`) are replaced with `./`.
 - Commitlint prefix auto-formatting: When Conventional Commits are enabled (the default), `mm` formats the chat subject according to commitlint rules (e.g. `@commitlint/config-conventional`). If the copied subject lacks a conventional `type:` prefix, `mm` infers one (using `docs` when all changed files are markdown files, otherwise `feat` if the text includes keywords like `add`, `create`, or `implement`, otherwise from git changes), formats the subject casing, strips trailing full stops (such as `...` or `.`), and fits the header within length limits. The assistant response body is preserved.
 
-`--chat` / `--agy` / `--claude` / `--codex` / `--devin` / `--freebuff` uses the chat subject (shaped by commitlint when enabled) and copied body. If copying the log from
+`--chat` / `--opencode` / `--agy` / `--claude` / `--codex` / `--devin` / `--freebuff` uses the chat subject (shaped by commitlint when enabled) and copied body. If copying the log from
 the AI Agent fails (for example, missing session, no transcript found, CLI failure,
 or empty messages), `mm` automatically falls back to path-based commit message
 generation instead of aborting with an error. In `--verbose` mode, the failure and
@@ -257,7 +260,7 @@ configs are evaluated with `node`; `extends` presets additionally require
 Applied rules are the ones that affect the generated header: type and scope
 enums/case, type/scope presence, type/header/subject length, and trailing full
 stops. Rules for bodies, footers, and trailers are not applied to generated
-messages because `mm` writes only a one-line header. In chat modes (`--chat`, `--agy`, `--claude`, `--codex`, `--devin`, and `--freebuff`), `mm` applies header shaping rules (type prefix, casing, length, and trailing full stop removal) to the subject line, while copying the assistant body intact.
+messages because `mm` writes only a one-line header. In chat modes (`--chat`, `--opencode`, `--agy`, `--claude`, `--codex`, `--devin`, and `--freebuff`), `mm` applies header shaping rules (type prefix, casing, length, and trailing full stop removal) to the subject line, while copying the assistant body intact.
 
 Use an explicit config with:
 
@@ -274,6 +277,7 @@ mm -s # commit only what is already staged
 mm -e # review the message in an editor
 mm --no-verify # bypass Git hooks
 mm --chat # copy the current OpenCode or Antigravity chat
+mm --opencode --print # preview the current OpenCode session
 mm --agy --print # preview the last Antigravity conversation log
 mm --agy-session conv-123 # commit with a specific Antigravity conversation
 mm --devin --print # preview the last Devin / Cascade conversation log
@@ -312,8 +316,8 @@ The setting must be `true` or `false`. Fix the value in `mm.json`; an invalid
 config stops `mm` before it stages or commits anything.
 
 `no OpenCode session selected`
-`--chat` needs `OPENCODE_SESSION_ID` from a running OpenCode session. Set it, or
-pass `--chat-session <ID>`.
+`--chat` or `--opencode` needs `OPENCODE_SESSION_ID` from a running OpenCode
+session. Set it, or pass `--chat-session <ID>`.
 
 `could not run opencode session export`
 Check that the `opencode` CLI is installed and on `PATH`, and that the session ID

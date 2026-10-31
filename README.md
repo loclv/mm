@@ -36,7 +36,7 @@ mm
 By default there is no AI or network call. The message is built from the paths
 and change types that Git reports.
 If the project has a commitlint configuration, its type,
-scope and length rules are applied too. Inside OpenCode, Antigravity, Claude Code, Codex, Devin / Codeium, or Freebuff / Codebuff, `--chat`, `--agy`, `--claude`, `--codex`, `--devin`, or `--freebuff`
+scope and length rules are applied too. Inside OpenCode, Antigravity, Claude Code, Codex, Devin / Codeium, or Freebuff / Codebuff, `--chat`, `--opencode`, `--agy`, `--claude`, `--codex`, `--devin`, or `--freebuff`
 can copy the session/prompt and last assistant message instead; see
 [Using an OpenCode, Antigravity, Claude Code, Codex, Devin / Codeium, or Freebuff / Codebuff chat](#using-an-opencode-antigravity-claude-code-codex-devin--codeium-or-freebuff--codebuff-chat).
 
@@ -89,6 +89,7 @@ mm --add # Stage everything (including new files), then commit
 mm --edit # Open the editor before committing
 mm --staged # Use only staged changes
 mm --chat # Copy the current OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff chat
+mm -o # Copy the current OpenCode session (same as --opencode)
 mm --agy # Copy the latest Antigravity log commit message
 mm --claude # Copy the latest Claude Code log commit message
 mm --codex # Copy the latest Codex log commit message
@@ -135,6 +136,7 @@ when running without any staged changes. To disable this, set `"autoAdd": false`
 
 ```sh
 mm --chat --print # preview the message (auto-detects OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff)
+mm --opencode --print # preview message from the current OpenCode session
 mm --agy --print # preview message from the latest Antigravity log
 mm --claude --print # preview message from the latest Claude Code log
 mm --codex --print # preview message from the latest Codex log
@@ -143,7 +145,7 @@ mm --freebuff --print # preview message from the latest Freebuff / Codebuff log
 mm --freebuff # commit using the latest Freebuff / Codebuff log
 ```
 
-- OpenCode: `OPENCODE_SESSION_ID` selects the session. The subject is the session title (or latest user prompt line), and the body is the last assistant message (or compaction summary).
+- OpenCode: `OPENCODE_SESSION_ID` selects the session; `--opencode` / `-o` forces OpenCode. The subject is the session title (or latest user prompt line), and the body is the last assistant message (or compaction summary).
 - Antigravity: Transcript logs from `~/.gemini/antigravity-ide/brain` (or `ANTIGRAVITY_CONVERSATION_ID`) are read. The subject is the latest user request line, and the body is the last assistant response.
 - Claude Code: Transcript logs from `~/.claude/projects/` (or `CLAUDE_SESSION_ID`) are read. The subject is the latest user prompt line, and the body is the last assistant text response.
 - Codex: Transcript logs from `~/.codex/sessions/` (or `CODEX_SESSION_ID`) are read. The subject is the thread title from `session_index.jsonl` (or latest user prompt line), and the body is the last assistant response.
@@ -203,7 +205,7 @@ Applied rules:
 Rules about bodies, footers, commit trailers and the case of free-form subjects
 are not applied to generated messages, because `mm` writes only a header. An
 explicit `--message` value is treated as an override and its prefix is kept.
-In chat modes (`--chat`, `--agy`, `--claude`, `--codex`, `--devin`), header shaping rules
+In chat modes (`--chat`, `--opencode`, `--agy`, `--claude`, `--codex`, `--devin`), header shaping rules
 (type prefix, casing, length, and trailing full stop removal) are applied to the
 subject, while copying the assistant body intact.
 

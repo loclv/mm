@@ -777,6 +777,26 @@ fn copies_the_current_opencode_chat_with_print() {
 
 #[cfg(unix)]
 #[test]
+fn opencode_flag_forces_the_opencode_session() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let (bin, fixture) = fake_opencode(&repo, CHAT_EXPORT);
+    let args_path = repo.path().join(".chat-args");
+    let envs = chat_env(&bin, &fixture, &args_path);
+    let output = repo.mm_with_env(&["-o", "--print"], &env_refs(&envs));
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(stdout(&output), "Add chat import\n\nFinal answer.");
+    assert_eq!(
+        fs::read_to_string(&args_path).expect("read fake opencode arguments"),
+        "session export ses_test"
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn commits_the_chat_title_and_body() {
     let repo = Repo::new();
     repo.write("foo.txt", "new\n");

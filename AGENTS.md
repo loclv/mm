@@ -44,6 +44,7 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
   rules, and `commitlint.rs` handles discovery/loading.
 - `chat.rs` loads chat context from OpenCode, Antigravity, Claude Code, Codex, Devin / Codeium, or Freebuff / Codebuff.
   - OpenCode: shells out to `opencode session export <id>` and parses its JSON.
+    `--opencode` / `-o` forces OpenCode when other agent logs are also present.
     `--chat` uses the session title as the subject and copies the last assistant
     message as the body, matching OpenCode's `/copy`; a completed compaction
     summary wins when it is the last message. Only `text` parts are joined with
