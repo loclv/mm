@@ -1,3 +1,9 @@
+---
+name: release
+description: release new version
+tags: ["release"]
+---
+
 # Release Process
 
 This document details the checklist and steps for releasing a new version of `mm`.

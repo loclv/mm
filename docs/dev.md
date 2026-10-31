@@ -1,3 +1,9 @@
+---
+name: development
+description: Rust development.
+tags: ["development"]
+---
+
 # Development
 
 ## Prerequisites
