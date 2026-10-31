@@ -1,25 +1,6 @@
 # mm - Rust CLI
 
-<div align="center">
-  <svg width="88" height="88" viewBox="0 0 88 88" fill="none" xmlns="http://www.w3.org/2000/svg">
-    <defs>
-      <linearGradient id="mm-bg" x1="0" y1="0" x2="88" y2="88" gradientUnits="userSpaceOnUse">
-        <stop offset="0%" stop-color="#1F242C"/>
-        <stop offset="100%" stop-color="#0E1116"/>
-      </linearGradient>
-      <linearGradient id="mm-accent" x1="18" y1="24" x2="70" y2="62" gradientUnits="userSpaceOnUse">
-        <stop offset="0%" stop-color="#F05032"/>
-        <stop offset="100%" stop-color="#FF7A59"/>
-      </linearGradient>
-    </defs>
-    <rect width="88" height="88" rx="20" fill="url(#mm-bg)" stroke="#30363D" stroke-width="1.5"/>
-    <path d="M 18 26 V 48 M 18 32 C 18 24, 29 24, 29 32 V 48 M 29 32 C 29 24, 40 24, 40 32 V 48 M 48 26 V 48 M 48 32 C 48 24, 59 24, 59 32 V 48 M 59 32 C 59 24, 70 24, 70 32 V 48" stroke="url(#mm-accent)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"/>
-    <path d="M 20 62 H 68" stroke="#2B313A" stroke-width="2" stroke-linecap="round"/>
-    <path d="M 29 62 H 59" stroke="url(#mm-accent)" stroke-width="2.5" stroke-linecap="round"/>
-    <circle cx="29" cy="62" r="4" fill="#15181E" stroke="url(#mm-accent)" stroke-width="2.5"/>
-    <circle cx="59" cy="62" r="4" fill="url(#mm-accent)"/>
-  </svg>
-</div>
+<div align="center"><svg width="88" height="88" viewBox="0 0 88 88" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="mm-bg" x1="0" y1="0" x2="88" y2="88" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#1F242C" /><stop offset="100%" stop-color="#0E1116" /></linearGradient><linearGradient id="mm-accent" x1="18" y1="24" x2="70" y2="62" gradientUnits="userSpaceOnUse"><stop offset="0%" stop-color="#F05032" /><stop offset="100%" stop-color="#FF7A59" /></linearGradient></defs><rect width="88" height="88" rx="20" fill="url(#mm-bg)" stroke="#30363D" stroke-width="1.5" /><path d="M 18 26 V 48 M 18 32 C 18 24, 29 24, 29 32 V 48 M 29 32 C 29 24, 40 24, 40 32 V 48 M 48 26 V 48 M 48 32 C 48 24, 59 24, 59 32 V 48 M 59 32 C 59 24, 70 24, 70 32 V 48" stroke="url(#mm-accent)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" /><path d="M 20 62 H 68" stroke="#2B313A" stroke-width="2" stroke-linecap="round" /><path d="M 29 62 H 59" stroke="url(#mm-accent)" stroke-width="2.5" stroke-linecap="round" /><circle cx="29" cy="62" r="4" fill="#15181E" stroke="url(#mm-accent)" stroke-width="2.5" /><circle cx="59" cy="62" r="4" fill="url(#mm-accent)" /></svg></div>
 
 `mm` is a Rust rewrite of the [MichaelCurrin/auto-commit-msg](https://github.com/MichaelCurrin/auto-commit-msg) logic with:
 
