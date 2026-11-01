@@ -1181,6 +1181,107 @@ fn copies_chat_log_replacing_current_repo_path_with_relative() {
 }
 
 #[test]
+fn chat_auto_detects_antigravity_by_project_path_among_multiple_projects() {
+    let repo_a = Repo::new();
+    repo_a.write("a.txt", "content a\n");
+    repo_a.git(&["add", "a.txt"]);
+
+    let repo_b = Repo::new();
+    repo_b.write("b.txt", "content b\n");
+    repo_b.git(&["add", "b.txt"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-multi-{}", std::process::id()));
+
+    // Create session A for repo_a
+    let logs_a = brain.join("conv-a").join(".system_generated/logs");
+    fs::create_dir_all(&logs_a).unwrap();
+    let transcript_a = format!(
+        r#"{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nfeature in project a\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: {}\n</ADDITIONAL_METADATA>"}}
+{{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Implemented feature in project a."}}
+"#,
+        repo_a.path().display()
+    );
+    let path_a = logs_a.join("transcript.jsonl");
+    fs::write(path_a, transcript_a).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    // Create session B for repo_b, modified later than session A
+    let logs_b = brain.join("conv-b").join(".system_generated/logs");
+    fs::create_dir_all(&logs_b).unwrap();
+    let transcript_b = format!(
+        r#"{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nfeature in project b\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: {}\n</ADDITIONAL_METADATA>"}}
+{{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Implemented feature in project b."}}
+"#,
+        repo_b.path().display()
+    );
+    let path_b = logs_b.join("transcript.jsonl");
+    fs::write(path_b, transcript_b).unwrap();
+
+    // When inside repo_a, mm must detect session A based on project path
+    let output_a = repo_a.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["OPENCODE_SESSION_ID", "ANTIGRAVITY_CONVERSATION_ID"],
+    );
+    assert!(output_a.status.success(), "{}", stderr(&output_a));
+    assert_eq!(
+        stdout(&output_a),
+        "feature in project a\n\nImplemented feature in project a."
+    );
+
+    // When inside repo_b, mm must detect session B based on project path
+    let output_b = repo_b.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["OPENCODE_SESSION_ID", "ANTIGRAVITY_CONVERSATION_ID"],
+    );
+    assert!(output_b.status.success(), "{}", stderr(&output_b));
+    assert_eq!(
+        stdout(&output_b),
+        "feature in project b\n\nImplemented feature in project b."
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
+fn chat_auto_detects_antigravity_when_project_path_is_deep_in_transcript() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let brain = std::env::temp_dir().join(format!("mm-test-brain-deep-{}", std::process::id()));
+    let conv_dir = brain.join("conv-deep");
+    let logs_dir = conv_dir.join(".system_generated/logs");
+    fs::create_dir_all(&logs_dir).unwrap();
+
+    // 80KB of padding before the repo path appears
+    let padding = "x".repeat(80_000);
+    let transcript = format!(
+        r#"{{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nfeature with deep log\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\npadding: {padding}\nActive Document: {}\n</ADDITIONAL_METADATA>"}}
+{{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","content":"Implemented deep feature."}}
+"#,
+        repo.path().display()
+    );
+    fs::write(logs_dir.join("transcript.jsonl"), transcript).unwrap();
+
+    let output = repo.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[("ANTIGRAVITY_BRAIN_DIR", &brain.to_string_lossy())],
+        &["OPENCODE_SESSION_ID", "ANTIGRAVITY_CONVERSATION_ID"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "feature with deep log\n\nImplemented deep feature."
+    );
+
+    let _ = fs::remove_dir_all(brain);
+}
+
+#[test]
 fn copies_claude_last_log_with_claude_flag() {
     let repo = Repo::new();
     repo.write("foo.txt", "new\n");

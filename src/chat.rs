@@ -158,6 +158,18 @@ impl Agent {
         }
     }
 
+    /// Find transcript on disk matching a specific repository root.
+    fn find_matching(self, repo_root: &Path) -> Option<(String, PathBuf)> {
+        match self {
+            Agent::OpenCode => None,
+            Agent::Antigravity => find_matching_antigravity_log(repo_root),
+            Agent::Claude => find_matching_claude_log(repo_root),
+            Agent::Codex => find_matching_codex_log(repo_root),
+            Agent::Devin => find_matching_devin_log(repo_root),
+            Agent::Freebuff => find_matching_freebuff_log(repo_root),
+        }
+    }
+
     /// Find the most recently modified transcript on disk.
     fn find_latest(self, repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
         match self {
@@ -1310,18 +1322,310 @@ pub fn sanitize_chat_body(text: &str, repo_root: Option<&Path>) -> String {
     sanitize_current_path(&no_urls, repo_root)
 }
 
-/// Path to Antigravity's brain directory storing conversation transcripts.
-pub fn antigravity_brain_dir() -> Option<PathBuf> {
+/// Candidate directories storing Antigravity brain transcripts.
+pub fn antigravity_brain_dirs() -> Vec<PathBuf> {
     if let Ok(dir) = std::env::var(ANTIGRAVITY_BRAIN_ENV) {
         let path = PathBuf::from(dir);
         if path.is_dir() {
-            return Some(path);
+            return vec![path];
         }
     }
 
-    let home = std::env::var_os("HOME").map(PathBuf::from)?;
-    let brain = home.join(".gemini/antigravity-ide/brain");
-    if brain.is_dir() { Some(brain) } else { None }
+    let mut dirs = Vec::new();
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let candidates = [
+            home.join(".gemini/antigravity/brain"),
+            home.join(".gemini/antigravity-ide/brain"),
+            home.join(".gemini/antigravity-cli/brain"),
+            home.join(".antigravity/brain"),
+            home.join(".config/antigravity/brain"),
+        ];
+
+        for dir in candidates {
+            if dir.is_dir() && !dirs.contains(&dir) {
+                dirs.push(dir);
+            }
+        }
+    }
+
+    dirs
+}
+
+/// Path to primary Antigravity brain directory storing conversation transcripts.
+pub fn antigravity_brain_dir() -> Option<PathBuf> {
+    antigravity_brain_dirs().into_iter().next()
+}
+
+/// Generate candidate matching path patterns for a repository root.
+fn repo_root_patterns(root: &Path) -> Vec<String> {
+    let mut patterns = Vec::new();
+    let root_str = root
+        .to_string_lossy()
+        .trim_end_matches('/')
+        .trim_end_matches('\\')
+        .to_string();
+    if !root_str.is_empty() {
+        patterns.push(root_str.clone());
+    }
+
+    // Handle macOS /private symlinks (/var -> /private/var, /tmp -> /private/tmp)
+    if let Some(stripped) = root_str.strip_prefix("/private") {
+        if !patterns.contains(&stripped.to_string()) {
+            patterns.push(stripped.to_string());
+        }
+    } else if root_str.starts_with("/var") || root_str.starts_with("/tmp") {
+        let prepended = format!("/private{root_str}");
+        if !patterns.contains(&prepended) {
+            patterns.push(prepended);
+        }
+    }
+
+    if let Ok(canonical) = fs::canonicalize(root) {
+        let can_str = canonical
+            .to_string_lossy()
+            .trim_end_matches('/')
+            .trim_end_matches('\\')
+            .to_string();
+        if !can_str.is_empty() && !patterns.contains(&can_str) {
+            patterns.push(can_str.clone());
+        }
+        if let Some(stripped) = can_str.strip_prefix("/private")
+            && !patterns.contains(&stripped.to_string())
+        {
+            patterns.push(stripped.to_string());
+        }
+    }
+
+    // Windows backslash / forward slash variations
+    let slash_variant = root_str.replace('\\', "/");
+    if !patterns.contains(&slash_variant) {
+        patterns.push(slash_variant);
+    }
+    let backslash_variant = root_str.replace('/', "\\");
+    if !patterns.contains(&backslash_variant) {
+        patterns.push(backslash_variant);
+    }
+    let json_escaped = root_str.replace('\\', "\\\\");
+    if !patterns.contains(&json_escaped) {
+        patterns.push(json_escaped);
+    }
+
+    // If root starts with HOME, add tilde pattern (~/...)
+    if let Some(home) = std::env::var_os("HOME").map(PathBuf::from) {
+        let home_str = home.to_string_lossy().trim_end_matches('/').to_string();
+        if let Some(rest) = root_str.strip_prefix(&home_str) {
+            let tilde = format!("~{rest}");
+            if !patterns.contains(&tilde) {
+                patterns.push(tilde);
+            }
+        }
+    }
+
+    // file:// URI variants
+    let mut file_uris = Vec::new();
+    for p in &patterns {
+        if p.starts_with('/') {
+            file_uris.push(format!("file://{p}"));
+        } else if p.len() > 1 && p.chars().nth(1) == Some(':') {
+            file_uris.push(format!("file:///{p}"));
+        }
+    }
+    for uri in file_uris {
+        if !patterns.contains(&uri) {
+            patterns.push(uri);
+        }
+    }
+
+    patterns
+}
+
+/// Query conversation_summaries.db for conversation matching patterns using sqlite3 CLI.
+fn query_antigravity_db(db_path: &Path, patterns: &[String]) -> Option<String> {
+    let output = std::process::Command::new("sqlite3")
+        .arg("-readonly")
+        .arg("-separator")
+        .arg("\t")
+        .arg(db_path)
+        .arg("SELECT conversation_id, workspace_uris FROM conversation_summaries ORDER BY last_modified_time DESC LIMIT 200;")
+        .output()
+        .ok()?;
+
+    if !output.status.success() {
+        return None;
+    }
+
+    let text = String::from_utf8_lossy(&output.stdout);
+    for line in text.lines() {
+        let mut parts = line.split('\t');
+        let conv_id = match parts.next() {
+            Some(id) if !id.trim().is_empty() => id.trim(),
+            _ => continue,
+        };
+        let uris = parts.next().unwrap_or("");
+        let uris_lower = uris.to_lowercase();
+        for pattern in patterns {
+            if uris.contains(pattern) || uris_lower.contains(&pattern.to_lowercase()) {
+                return Some(conv_id.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Find an Antigravity conversation log by inspecting Antigravity SQLite database.
+fn find_antigravity_log_from_db(repo_root: &Path) -> Option<(String, PathBuf)> {
+    let patterns = repo_root_patterns(repo_root);
+    let mut db_paths = Vec::new();
+
+    for brain in antigravity_brain_dirs() {
+        if let Some(parent) = brain.parent() {
+            let db = parent.join("conversation_summaries.db");
+            if db.is_file() && !db_paths.contains(&db) {
+                db_paths.push(db);
+            }
+        }
+    }
+
+    if std::env::var_os(ANTIGRAVITY_BRAIN_ENV).is_none()
+        && let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+    {
+        for sub in [
+            ".gemini/antigravity",
+            ".gemini/antigravity-ide",
+            ".gemini/antigravity-cli",
+        ] {
+            let db = home.join(sub).join("conversation_summaries.db");
+            if db.is_file() && !db_paths.contains(&db) {
+                db_paths.push(db);
+            }
+        }
+    }
+
+    for db_path in db_paths {
+        if let Some(conv_id) = query_antigravity_db(&db_path, &patterns)
+            && let Some((name, log_path)) = resolve_antigravity_session(&conv_id)
+        {
+            return Some((name, log_path));
+        }
+    }
+
+    None
+}
+
+/// Scan a file line-by-line for any pattern up to a byte limit.
+fn scan_file_for_patterns(path: &Path, patterns: &[String]) -> bool {
+    let file = match fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return false,
+    };
+    let reader = std::io::BufReader::new(file);
+    let mut bytes_read = 0;
+    const MAX_SCAN_BYTES: usize = 2 * 1024 * 1024; // 2 MB
+
+    for line in reader.lines() {
+        let line = match line {
+            Ok(l) => l,
+            Err(_) => break,
+        };
+        bytes_read += line.len();
+        for pattern in patterns {
+            if line.contains(pattern) {
+                return true;
+            }
+        }
+        if bytes_read >= MAX_SCAN_BYTES {
+            break;
+        }
+    }
+    false
+}
+
+/// Check if a log file (or its companion full transcript) matches any pattern.
+fn log_matches_patterns(log_path: &Path, patterns: &[String]) -> bool {
+    if scan_file_for_patterns(log_path, patterns) {
+        return true;
+    }
+
+    if let Some(parent) = log_path.parent() {
+        let full_log = parent.join("transcript_full.jsonl");
+        if full_log.is_file() && full_log != log_path {
+            return scan_file_for_patterns(&full_log, patterns);
+        }
+    }
+
+    false
+}
+
+/// Find an Antigravity conversation log by inspecting brain transcript files.
+fn find_antigravity_log_from_transcripts(
+    repo_root: Option<&Path>,
+    require_match: bool,
+) -> Option<(String, PathBuf)> {
+    let mut candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+
+    for brain in antigravity_brain_dirs() {
+        let entries = match fs::read_dir(&brain) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let name = entry.file_name().to_string_lossy().to_string();
+            if name == "tempmediaStorage" {
+                continue;
+            }
+
+            let log = path.join(".system_generated/logs/transcript.jsonl");
+            let target_log = if log.is_file() {
+                log
+            } else {
+                let alt = path.join("transcript.jsonl");
+                if alt.is_file() {
+                    alt
+                } else {
+                    continue;
+                }
+            };
+
+            if !seen.insert(target_log.clone()) {
+                continue;
+            }
+
+            let mtime = fs::metadata(&target_log)
+                .and_then(|m| m.modified())
+                .unwrap_or(UNIX_EPOCH);
+
+            candidates.push((mtime, name, target_log));
+        }
+    }
+
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    if let Some(root) = repo_root {
+        let patterns = repo_root_patterns(root);
+        for (_, name, log_path) in &candidates {
+            if log_matches_patterns(log_path, &patterns) {
+                return Some((name.clone(), log_path.clone()));
+            }
+        }
+    }
+
+    if require_match {
+        return None;
+    }
+
+    let (_, name, log_path) = candidates.remove(0);
+    Some((name, log_path))
 }
 
 /// Resolve an Antigravity conversation by session ID, folder name, or file path.
@@ -1356,7 +1660,7 @@ pub fn resolve_antigravity_session(session: &str) -> Option<(String, PathBuf)> {
         }
     }
 
-    if let Some(brain) = antigravity_brain_dir() {
+    for brain in antigravity_brain_dirs() {
         let dir = brain.join(session);
         if dir.is_dir() {
             let log = dir.join(".system_generated/logs/transcript.jsonl");
@@ -1389,67 +1693,23 @@ pub fn resolve_antigravity_session(session: &str) -> Option<(String, PathBuf)> {
     None
 }
 
-/// Find the latest Antigravity conversation log.
+/// Find the latest Antigravity conversation log that matches `repo_root`.
+pub fn find_matching_antigravity_log(repo_root: &Path) -> Option<(String, PathBuf)> {
+    if let Some(matched) = find_antigravity_log_from_db(repo_root) {
+        return Some(matched);
+    }
+    find_antigravity_log_from_transcripts(Some(repo_root), true)
+}
+
+/// Find the latest Antigravity conversation log, prioritizing sessions matching `repo_root`.
 pub fn find_latest_antigravity_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
-    let brain = antigravity_brain_dir()?;
-    let entries = fs::read_dir(&brain).ok()?;
-
-    let mut candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
-
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if !path.is_dir() {
-            continue;
-        }
-
-        let name = entry.file_name().to_string_lossy().to_string();
-        if name == "tempmediaStorage" {
-            continue;
-        }
-
-        let log = path.join(".system_generated/logs/transcript.jsonl");
-        let target_log = if log.is_file() {
-            log
-        } else {
-            let alt = path.join("transcript.jsonl");
-            if alt.is_file() {
-                alt
-            } else {
-                continue;
-            }
-        };
-
-        let mtime = fs::metadata(&target_log)
-            .and_then(|m| m.modified())
-            .unwrap_or(UNIX_EPOCH);
-
-        candidates.push((mtime, name, target_log));
+    if let Some(root) = repo_root
+        && let Some(matched) = find_matching_antigravity_log(root)
+    {
+        return Some(matched);
     }
 
-    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
-
-    if candidates.is_empty() {
-        return None;
-    }
-
-    if let Some(root) = repo_root {
-        let root_str = root.to_string_lossy();
-        for (_, name, log_path) in candidates.iter().take(20) {
-            if let Ok(mut file) = fs::File::open(log_path) {
-                use std::io::Read;
-                let mut buffer = [0u8; 65536];
-                if let Ok(n) = file.read(&mut buffer) {
-                    let sample = String::from_utf8_lossy(&buffer[..n]);
-                    if sample.contains(&*root_str) {
-                        return Some((name.clone(), log_path.clone()));
-                    }
-                }
-            }
-        }
-    }
-
-    let (_, name, log_path) = candidates.remove(0);
-    Some((name, log_path))
+    find_antigravity_log_from_transcripts(None, false)
 }
 
 /// Extract user request prompt from Antigravity content.
@@ -1719,52 +1979,93 @@ fn collect_claude_jsonl(dir: &Path, candidates: &mut Vec<(SystemTime, String, Pa
     }
 }
 
-/// Find the latest Claude Code session log.
-pub fn find_latest_claude_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+/// Find Claude Code session log matching `repo_root`.
+pub fn find_matching_claude_log(root: &Path) -> Option<(String, PathBuf)> {
     let claude_dir = claude_config_dir()?;
     let projects_dir = claude_dir.join("projects");
 
     let mut candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
 
-    if let Some(root) = repo_root {
-        let encoded = encode_claude_project_path(root);
+    let mut check_roots = vec![root.to_path_buf()];
+    if let Ok(can) = fs::canonicalize(root)
+        && can != root
+        && !check_roots.contains(&can)
+    {
+        check_roots.push(can);
+    }
+    let root_str = root.to_string_lossy();
+    if let Some(stripped) = root_str.strip_prefix("/private") {
+        let p = PathBuf::from(stripped);
+        if !check_roots.contains(&p) {
+            check_roots.push(p);
+        }
+    }
+
+    for r in &check_roots {
+        let encoded = encode_claude_project_path(r);
         let project_folder = projects_dir.join(&encoded);
         if project_folder.is_dir() {
             collect_claude_jsonl(&project_folder, &mut candidates);
             collect_claude_jsonl(&project_folder.join("sessions"), &mut candidates);
         }
+    }
 
-        // Also check history.jsonl for sessions matching repo_root
-        let history_file = claude_dir.join("history.jsonl");
-        if let Ok(file) = fs::File::open(&history_file) {
-            let root_str = root.to_string_lossy();
-            let reader = std::io::BufReader::new(file);
-            let mut matching_sessions = Vec::new();
-            for line in reader.lines().map_while(Result::ok) {
-                if let Ok(val) = serde_json::from_str::<Value>(&line)
-                    && let Some(proj) = val.get("project").and_then(Value::as_str)
-                    && (proj == root_str.as_ref()
-                        || proj.starts_with(root_str.as_ref())
-                        || root_str.starts_with(proj))
-                    && let Some(sess_id) = val.get("sessionId").and_then(Value::as_str)
-                {
-                    matching_sessions.push(sess_id.to_string());
-                }
+    // Also check history.jsonl for sessions matching repo_root
+    let history_file = claude_dir.join("history.jsonl");
+    if let Ok(file) = fs::File::open(&history_file) {
+        let patterns: Vec<String> = check_roots
+            .iter()
+            .map(|p| p.to_string_lossy().to_string())
+            .collect();
+        let reader = std::io::BufReader::new(file);
+        let mut matching_sessions = Vec::new();
+        for line in reader.lines().map_while(Result::ok) {
+            if let Ok(val) = serde_json::from_str::<Value>(&line)
+                && let Some(proj) = val.get("project").and_then(Value::as_str)
+                && patterns
+                    .iter()
+                    .any(|p| proj == p || proj.starts_with(p) || p.starts_with(proj))
+                && let Some(sess_id) = val.get("sessionId").and_then(Value::as_str)
+            {
+                matching_sessions.push(sess_id.to_string());
             }
+        }
 
-            for sess in matching_sessions.iter().rev() {
-                if let Some((name, p)) = resolve_claude_session_in(&claude_dir, sess) {
-                    let mtime = fs::metadata(&p)
-                        .and_then(|m| m.modified())
-                        .unwrap_or(UNIX_EPOCH);
-                    candidates.push((mtime, name, p));
-                }
+        for sess in matching_sessions.iter().rev() {
+            if let Some((name, p)) = resolve_claude_session_in(&claude_dir, sess) {
+                let mtime = fs::metadata(&p)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(UNIX_EPOCH);
+                candidates.push((mtime, name, p));
             }
         }
     }
 
-    if candidates.is_empty()
-        && projects_dir.is_dir()
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+    candidates.dedup_by(|a, b| a.2 == b.2);
+
+    if candidates.is_empty() {
+        return None;
+    }
+
+    let (_, name, log_path) = candidates.remove(0);
+    Some((name, log_path))
+}
+
+/// Find the latest Claude Code session log.
+pub fn find_latest_claude_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+    if let Some(root) = repo_root
+        && let Some(matched) = find_matching_claude_log(root)
+    {
+        return Some(matched);
+    }
+
+    let claude_dir = claude_config_dir()?;
+    let projects_dir = claude_dir.join("projects");
+
+    let mut candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+
+    if projects_dir.is_dir()
         && let Ok(entries) = fs::read_dir(&projects_dir)
     {
         for entry in entries.flatten() {
@@ -2189,8 +2490,47 @@ pub fn resolve_codex_session(session: &str) -> Option<(String, PathBuf)> {
     None
 }
 
+/// Find Codex session log matching `repo_root`.
+pub fn find_matching_codex_log(root: &Path) -> Option<(String, PathBuf)> {
+    let codex_dir = codex_home_dir()?;
+    let mut candidates = Vec::new();
+
+    let sessions_dir = codex_dir.join("sessions");
+    if sessions_dir.is_dir() {
+        collect_codex_files(&sessions_dir, &mut candidates);
+    }
+    collect_codex_files(&codex_dir, &mut candidates);
+
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+    candidates.dedup_by(|a, b| a.1 == b.1);
+
+    let patterns = repo_root_patterns(root);
+    for (_, path) in &candidates {
+        if let Some((id_opt, Some(cwd))) = peek_codex_meta(path)
+            && patterns
+                .iter()
+                .any(|p| cwd == *p || cwd.starts_with(p) || p.starts_with(&cwd))
+        {
+            let name = id_opt.unwrap_or_else(|| {
+                path.file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or("codex")
+                    .to_string()
+            });
+            return Some((name, path.clone()));
+        }
+    }
+    None
+}
+
 /// Find the latest Codex session log, prioritizing sessions matching `repo_root`.
 pub fn find_latest_codex_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+    if let Some(root) = repo_root
+        && let Some(matched) = find_matching_codex_log(root)
+    {
+        return Some(matched);
+    }
+
     let codex_dir = codex_home_dir()?;
     let mut candidates = Vec::new();
 
@@ -2205,25 +2545,6 @@ pub fn find_latest_codex_log(repo_root: Option<&Path>) -> Option<(String, PathBu
 
     if candidates.is_empty() {
         return None;
-    }
-
-    if let Some(root) = repo_root {
-        let root_str = root.to_string_lossy();
-        for (_, path) in &candidates {
-            if let Some((id_opt, Some(cwd))) = peek_codex_meta(path)
-                && (cwd == root_str.as_ref()
-                    || cwd.starts_with(root_str.as_ref())
-                    || root_str.starts_with(&cwd))
-            {
-                let name = id_opt.unwrap_or_else(|| {
-                    path.file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or("codex")
-                        .to_string()
-                });
-                return Some((name, path.clone()));
-            }
-        }
     }
 
     let (_, path) = candidates.remove(0);
@@ -2817,8 +3138,40 @@ pub fn resolve_devin_session(session: &str) -> Option<(String, PathBuf)> {
     None
 }
 
+/// Find Devin / Cascade session log matching `repo_root`.
+pub fn find_matching_devin_log(root: &Path) -> Option<(String, PathBuf)> {
+    let mut candidates = Vec::new();
+    for dir in devin_transcripts_dirs() {
+        collect_devin_transcripts(&dir, &mut candidates);
+    }
+
+    candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+    candidates.dedup_by(|a, b| a.2 == b.2);
+
+    let patterns = repo_root_patterns(root);
+    for (_, name, log_path) in candidates.iter().take(50) {
+        if let Ok(mut file) = fs::File::open(log_path) {
+            use std::io::Read;
+            let mut buffer = [0u8; 65536];
+            if let Ok(n) = file.read(&mut buffer) {
+                let sample = String::from_utf8_lossy(&buffer[..n]);
+                if patterns.iter().any(|p| sample.contains(p)) {
+                    return Some((name.clone(), log_path.clone()));
+                }
+            }
+        }
+    }
+    None
+}
+
 /// Find the latest Devin / Cascade session log.
 pub fn find_latest_devin_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+    if let Some(root) = repo_root
+        && let Some(matched) = find_matching_devin_log(root)
+    {
+        return Some(matched);
+    }
+
     let mut candidates = Vec::new();
     for dir in devin_transcripts_dirs() {
         collect_devin_transcripts(&dir, &mut candidates);
@@ -2829,22 +3182,6 @@ pub fn find_latest_devin_log(repo_root: Option<&Path>) -> Option<(String, PathBu
 
     if candidates.is_empty() {
         return None;
-    }
-
-    if let Some(root) = repo_root {
-        let root_str = root.to_string_lossy();
-        for (_, name, log_path) in candidates.iter().take(20) {
-            if let Ok(mut file) = fs::File::open(log_path) {
-                use std::io::Read;
-                let mut buffer = [0u8; 65536];
-                if let Ok(n) = file.read(&mut buffer) {
-                    let sample = String::from_utf8_lossy(&buffer[..n]);
-                    if sample.contains(&*root_str) {
-                        return Some((name.clone(), log_path.clone()));
-                    }
-                }
-            }
-        }
     }
 
     let (_, name, log_path) = candidates.remove(0);
@@ -3204,8 +3541,62 @@ pub fn find_latest_freebuff_log_in(
     None
 }
 
+/// Find Freebuff / Codebuff session log matching `repo_root`.
+pub fn find_matching_freebuff_log(root: &Path) -> Option<(String, PathBuf)> {
+    let dirs = freebuff_config_dirs();
+    let mut project_candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+    let mut other_candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+
+    for config_dir in &dirs {
+        collect_freebuff_candidates_in(
+            config_dir,
+            Some(root),
+            &mut project_candidates,
+            &mut other_candidates,
+        );
+    }
+
+    // Check inside repo root if .freebuff/chats or .codebuff/chats exists
+    for sub in [".freebuff", ".codebuff"] {
+        let chats_dir = root.join(sub).join("chats");
+        if let Ok(chat_entries) = fs::read_dir(&chats_dir) {
+            for chat_entry in chat_entries.flatten() {
+                let chat_path = chat_entry.path();
+                if chat_path.is_dir() {
+                    let msg_file = chat_path.join("chat-messages.json");
+                    if msg_file.is_file() {
+                        let id = chat_path
+                            .file_name()
+                            .and_then(|s| s.to_str())
+                            .unwrap_or("freebuff")
+                            .to_string();
+                        let mtime = fs::metadata(&msg_file)
+                            .and_then(|m| m.modified())
+                            .unwrap_or(UNIX_EPOCH);
+                        project_candidates.push((mtime, id, msg_file));
+                    }
+                }
+            }
+        }
+    }
+
+    if !project_candidates.is_empty() {
+        project_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
+        let (_, id, path) = project_candidates.remove(0);
+        return Some((id, path));
+    }
+
+    None
+}
+
 /// Find the latest Freebuff / Codebuff session log.
 pub fn find_latest_freebuff_log(repo_root: Option<&Path>) -> Option<(String, PathBuf)> {
+    if let Some(root) = repo_root
+        && let Some(matched) = find_matching_freebuff_log(root)
+    {
+        return Some(matched);
+    }
+
     let dirs = freebuff_config_dirs();
     let mut project_candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
     let mut other_candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
@@ -3217,38 +3608,6 @@ pub fn find_latest_freebuff_log(repo_root: Option<&Path>) -> Option<(String, Pat
             &mut project_candidates,
             &mut other_candidates,
         );
-    }
-
-    // Check inside repo root if .freebuff/chats or .codebuff/chats exists
-    if let Some(root) = repo_root {
-        for sub in [".freebuff", ".codebuff"] {
-            let chats_dir = root.join(sub).join("chats");
-            if let Ok(chat_entries) = fs::read_dir(&chats_dir) {
-                for chat_entry in chat_entries.flatten() {
-                    let chat_path = chat_entry.path();
-                    if chat_path.is_dir() {
-                        let msg_file = chat_path.join("chat-messages.json");
-                        if msg_file.is_file() {
-                            let id = chat_path
-                                .file_name()
-                                .and_then(|s| s.to_str())
-                                .unwrap_or("freebuff")
-                                .to_string();
-                            let mtime = fs::metadata(&msg_file)
-                                .and_then(|m| m.modified())
-                                .unwrap_or(UNIX_EPOCH);
-                            project_candidates.push((mtime, id, msg_file));
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    if !project_candidates.is_empty() {
-        project_candidates.sort_by_key(|a| std::cmp::Reverse(a.0));
-        let (_, id, path) = project_candidates.remove(0);
-        return Some((id, path));
     }
 
     if !other_candidates.is_empty() {
@@ -3718,6 +4077,26 @@ fn load_raw(
             .env_session()
             .and_then(|sess| agent.resolve(&sess, repo_root))
         {
+            announce(agent, &id, &path, verbose);
+            return agent.parse(&path, &id, repo_root);
+        }
+    }
+
+    if let Some(root) = repo_root {
+        let mut matching_candidates: Vec<(SystemTime, Agent, String, PathBuf)> = Agent::LOCAL
+            .into_iter()
+            .filter_map(|agent| {
+                let (id, path) = agent.find_matching(root)?;
+                let mtime = fs::metadata(&path)
+                    .and_then(|metadata| metadata.modified())
+                    .unwrap_or(UNIX_EPOCH);
+                Some((mtime, agent, id, path))
+            })
+            .collect();
+
+        matching_candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.0));
+
+        if let Some((_, agent, id, path)) = matching_candidates.into_iter().next() {
             announce(agent, &id, &path, verbose);
             return agent.parse(&path, &id, repo_root);
         }
@@ -4447,6 +4826,51 @@ mod tests {
         assert_eq!(message.subject, "fix ~/project/lib.rs");
         assert_eq!(message.body, "Fixed bug in [lib.rs](~/project/lib.rs).");
         assert!(!message.message(None).contains("secret_user"));
+    }
+
+    #[test]
+    fn repo_root_patterns_generates_expected_variants() {
+        let path = Path::new("/Users/example/project");
+        let patterns = repo_root_patterns(path);
+        assert!(patterns.contains(&"/Users/example/project".to_string()));
+        assert!(patterns.contains(&"file:///Users/example/project".to_string()));
+        assert!(patterns.contains(&"/Users/example/project".replace('/', "\\")));
+    }
+
+    #[test]
+    fn find_matching_antigravity_log_picks_correct_project() {
+        let temp = std::env::temp_dir().join(format!("mm-test-unit-agy-{}", std::process::id()));
+        let brain = temp.join("brain");
+        let conv_1 = brain.join("conv-proj1").join(".system_generated/logs");
+        let conv_2 = brain.join("conv-proj2").join(".system_generated/logs");
+        fs::create_dir_all(&conv_1).unwrap();
+        fs::create_dir_all(&conv_2).unwrap();
+
+        let t1 = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nproj1 task\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: /workspace/project-one/main.rs\n</ADDITIONAL_METADATA>"}"#;
+        let t2 = r#"{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","content":"<USER_REQUEST>\nproj2 task\n</USER_REQUEST>\n<ADDITIONAL_METADATA>\nActive Document: /workspace/project-two/main.rs\n</ADDITIONAL_METADATA>"}"#;
+
+        fs::write(conv_1.join("transcript.jsonl"), t1).unwrap();
+        fs::write(conv_2.join("transcript.jsonl"), t2).unwrap();
+
+        unsafe {
+            std::env::set_var(ANTIGRAVITY_BRAIN_ENV, brain.to_string_lossy().as_ref());
+        }
+
+        let match_1 = find_matching_antigravity_log(Path::new("/workspace/project-one"));
+        assert!(match_1.is_some());
+        assert_eq!(match_1.unwrap().0, "conv-proj1");
+
+        let match_2 = find_matching_antigravity_log(Path::new("/workspace/project-two"));
+        assert!(match_2.is_some());
+        assert_eq!(match_2.unwrap().0, "conv-proj2");
+
+        let match_none = find_matching_antigravity_log(Path::new("/workspace/project-unknown"));
+        assert!(match_none.is_none());
+
+        unsafe {
+            std::env::remove_var(ANTIGRAVITY_BRAIN_ENV);
+        }
+        let _ = fs::remove_dir_all(temp);
     }
 
     #[test]
