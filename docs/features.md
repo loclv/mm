@@ -53,7 +53,16 @@ For AI-assisted workflows, `mm --chat` copies session titles, user prompts, and 
 
 ## 3. Real-Time Multi-Project Path Auto-Detection
 
-When working across multiple repositories simultaneously in real time, `mm` accurately pairs each repository with its corresponding AI session:
+When working across multiple repositories simultaneously in real time, `mm` accurately pairs each repository with its corresponding AI session across all supported agent harnesses:
+
+- **Antigravity**: Resolves sessions via `conversation_summaries.db` workspace URIs and streams `transcript.jsonl` matching the repository path.
+- **OpenCode**: Auto-detects matching sessions by checking OpenCode storage project configurations (`storage/project/*.json` worktrees) and CLI session lists against the repository root.
+- **Claude Code**: Matches encoded project directories (`~/.claude/projects/<encoded-path>`), `history.jsonl` project records, and recursive session transcript contents.
+- **Codex**: Matches the repository working directory in `session_meta.payload.cwd`, `session_index.jsonl` directory mappings, and deep streaming scans of `.jsonl`/`.jsonl.zst` rollouts.
+- **Devin / Cascade**: Inspects session metadata worktrees and scans recent transcripts for the repository root across ATIF JSON, JSONL logs, and Markdown trajectories.
+- **Freebuff / Codebuff**: Resolves repository IDs via `.freebuff/project-id` / `.codebuff/project-id`, project folder names under `~/.config/manicode/projects/`, `chat-meta.json`, and deep chat transcript scans.
+
+### Robust Path Scoping & Matching
 
 - **Repository Root Scoping**: Evaluates the Git top-level root (`git rev-parse --show-toplevel`) against conversation workspace metadata.
 - **Deep Path Inspection**: Checks project paths against:

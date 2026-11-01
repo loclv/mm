@@ -1246,6 +1246,451 @@ fn chat_auto_detects_antigravity_by_project_path_among_multiple_projects() {
 }
 
 #[test]
+fn chat_auto_detects_claude_by_project_path_among_multiple_projects() {
+    let repo_a = Repo::new();
+    repo_a.write("a.txt", "content a\n");
+    repo_a.git(&["add", "a.txt"]);
+
+    let repo_b = Repo::new();
+    repo_b.write("b.txt", "content b\n");
+    repo_b.git(&["add", "b.txt"]);
+
+    let claude_dir =
+        std::env::temp_dir().join(format!("mm-test-claude-multi-{}", std::process::id()));
+    let projects_dir = claude_dir.join("projects");
+    let empty_brain =
+        std::env::temp_dir().join(format!("mm-test-empty-brain-claude-{}", std::process::id()));
+    fs::create_dir_all(&empty_brain).unwrap();
+
+    let enc_a = mm::chat::encode_claude_project_path(repo_a.path());
+    let enc_b = mm::chat::encode_claude_project_path(repo_b.path());
+
+    let dir_a = projects_dir.join(&enc_a);
+    let dir_b = projects_dir.join(&enc_b);
+    fs::create_dir_all(&dir_a).unwrap();
+    fs::create_dir_all(&dir_b).unwrap();
+
+    let transcript_a = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"feature a prompt"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Implemented feature a."}]}}
+"#;
+    fs::write(dir_a.join("session_a.jsonl"), transcript_a).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let transcript_b = r#"{"type":"user","message":{"role":"user","content":[{"type":"text","text":"feature b prompt"}]}}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Implemented feature b."}]}}
+"#;
+    fs::write(dir_b.join("session_b.jsonl"), transcript_b).unwrap();
+
+    let output_a = repo_a.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("CLAUDE_CONFIG_DIR", &claude_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &[
+            "OPENCODE_SESSION_ID",
+            "CLAUDE_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+        ],
+    );
+    assert!(output_a.status.success(), "{}", stderr(&output_a));
+    assert_eq!(
+        stdout(&output_a),
+        "feature a prompt\n\nImplemented feature a."
+    );
+
+    let output_b = repo_b.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("CLAUDE_CONFIG_DIR", &claude_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &[
+            "OPENCODE_SESSION_ID",
+            "CLAUDE_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+        ],
+    );
+    assert!(output_b.status.success(), "{}", stderr(&output_b));
+    assert_eq!(
+        stdout(&output_b),
+        "feature b prompt\n\nImplemented feature b."
+    );
+
+    let _ = fs::remove_dir_all(claude_dir);
+    let _ = fs::remove_dir_all(empty_brain);
+}
+
+#[test]
+fn chat_auto_detects_codex_by_project_path_among_multiple_projects() {
+    let repo_a = Repo::new();
+    repo_a.write("a.txt", "content a\n");
+    repo_a.git(&["add", "a.txt"]);
+
+    let repo_b = Repo::new();
+    repo_b.write("b.txt", "content b\n");
+    repo_b.git(&["add", "b.txt"]);
+
+    let codex_dir =
+        std::env::temp_dir().join(format!("mm-test-codex-multi-{}", std::process::id()));
+    let sessions_dir = codex_dir
+        .join("sessions")
+        .join("2026")
+        .join("11")
+        .join("02");
+    fs::create_dir_all(&sessions_dir).unwrap();
+    let empty_brain =
+        std::env::temp_dir().join(format!("mm-test-empty-brain-codex-{}", std::process::id()));
+    fs::create_dir_all(&empty_brain).unwrap();
+
+    let path_a_str = repo_a.path().display().to_string();
+    let path_b_str = repo_b.path().display().to_string();
+
+    let transcript_a = format!(
+        r#"{{"type":"session_meta","payload":{{"id":"ses-a","cwd":"{path_a_str}"}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"feature a prompt"}}]}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"Implemented feature a."}}]}}}}
+"#
+    );
+    fs::write(sessions_dir.join("rollout-a.jsonl"), transcript_a).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let transcript_b = format!(
+        r#"{{"type":"session_meta","payload":{{"id":"ses-b","cwd":"{path_b_str}"}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"feature b prompt"}}]}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"Implemented feature b."}}]}}}}
+"#
+    );
+    fs::write(sessions_dir.join("rollout-b.jsonl"), transcript_b).unwrap();
+
+    let output_a = repo_a.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("CODEX_HOME", &codex_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &[
+            "OPENCODE_SESSION_ID",
+            "CODEX_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+        ],
+    );
+    assert!(output_a.status.success(), "{}", stderr(&output_a));
+    assert_eq!(
+        stdout(&output_a),
+        "feature a prompt\n\nImplemented feature a."
+    );
+
+    let output_b = repo_b.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("CODEX_HOME", &codex_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &[
+            "OPENCODE_SESSION_ID",
+            "CODEX_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+        ],
+    );
+    assert!(output_b.status.success(), "{}", stderr(&output_b));
+    assert_eq!(
+        stdout(&output_b),
+        "feature b prompt\n\nImplemented feature b."
+    );
+
+    let _ = fs::remove_dir_all(codex_dir);
+    let _ = fs::remove_dir_all(empty_brain);
+}
+
+#[test]
+fn chat_auto_detects_devin_by_project_path_among_multiple_projects() {
+    let repo_a = Repo::new();
+    repo_a.write("a.txt", "content a\n");
+    repo_a.git(&["add", "a.txt"]);
+
+    let repo_b = Repo::new();
+    repo_b.write("b.txt", "content b\n");
+    repo_b.git(&["add", "b.txt"]);
+
+    let devin_dir =
+        std::env::temp_dir().join(format!("mm-test-devin-multi-{}", std::process::id()));
+    let transcripts_dir = devin_dir.join("transcripts");
+    fs::create_dir_all(&transcripts_dir).unwrap();
+    let empty_brain =
+        std::env::temp_dir().join(format!("mm-test-empty-brain-devin-{}", std::process::id()));
+    fs::create_dir_all(&empty_brain).unwrap();
+
+    let path_a_str = repo_a.path().display().to_string();
+    let path_b_str = repo_b.path().display().to_string();
+
+    let transcript_a = format!(
+        r#"{{
+  "schema_version": "ATIF-v1.7",
+  "steps": [
+    {{"role": "user", "content": "feature a prompt\nWorking in {path_a_str}"}},
+    {{"role": "assistant", "content": "Implemented feature a."}}
+  ]
+}}
+"#
+    );
+    fs::write(transcripts_dir.join("devin-a.json"), transcript_a).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let transcript_b = format!(
+        r#"{{
+  "schema_version": "ATIF-v1.7",
+  "steps": [
+    {{"role": "user", "content": "feature b prompt\nWorking in {path_b_str}"}},
+    {{"role": "assistant", "content": "Implemented feature b."}}
+  ]
+}}
+"#
+    );
+    fs::write(transcripts_dir.join("devin-b.json"), transcript_b).unwrap();
+
+    let output_a = repo_a.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("DEVIN_HOME", &devin_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &[
+            "OPENCODE_SESSION_ID",
+            "DEVIN_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+        ],
+    );
+    assert!(output_a.status.success(), "{}", stderr(&output_a));
+    assert_eq!(
+        stdout(&output_a),
+        "feature a prompt\n\nImplemented feature a."
+    );
+
+    let output_b = repo_b.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("DEVIN_HOME", &devin_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &[
+            "OPENCODE_SESSION_ID",
+            "DEVIN_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+        ],
+    );
+    assert!(output_b.status.success(), "{}", stderr(&output_b));
+    assert_eq!(
+        stdout(&output_b),
+        "feature b prompt\n\nImplemented feature b."
+    );
+
+    let _ = fs::remove_dir_all(devin_dir);
+    let _ = fs::remove_dir_all(empty_brain);
+}
+
+#[test]
+fn chat_auto_detects_freebuff_by_project_path_among_multiple_projects() {
+    let repo_a = Repo::new();
+    repo_a.write("a.txt", "content a\n");
+    repo_a.git(&["add", "a.txt"]);
+
+    let repo_b = Repo::new();
+    repo_b.write("b.txt", "content b\n");
+    repo_b.git(&["add", "b.txt"]);
+
+    let freebuff_dir =
+        std::env::temp_dir().join(format!("mm-test-freebuff-multi-{}", std::process::id()));
+    let name_a = repo_a.path().file_name().unwrap().to_string_lossy();
+    let name_b = repo_b.path().file_name().unwrap().to_string_lossy();
+    let empty_brain = std::env::temp_dir().join(format!(
+        "mm-test-empty-brain-freebuff-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&empty_brain).unwrap();
+
+    let chat_a = freebuff_dir
+        .join("projects")
+        .join(&*name_a)
+        .join("chats")
+        .join("chat-a");
+    let chat_b = freebuff_dir
+        .join("projects")
+        .join(&*name_b)
+        .join("chats")
+        .join("chat-b");
+    fs::create_dir_all(&chat_a).unwrap();
+    fs::create_dir_all(&chat_b).unwrap();
+
+    fs::write(
+        chat_a.join("chat-meta.json"),
+        r#"{"title": "feature a prompt"}"#,
+    )
+    .unwrap();
+    fs::write(
+        chat_a.join("chat-messages.json"),
+        r#"[{"variant": "user", "content": "feature a prompt"}, {"variant": "ai", "content": "Implemented feature a."}]"#,
+    )
+    .unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    fs::write(
+        chat_b.join("chat-meta.json"),
+        r#"{"title": "feature b prompt"}"#,
+    )
+    .unwrap();
+    fs::write(
+        chat_b.join("chat-messages.json"),
+        r#"[{"variant": "user", "content": "feature b prompt"}, {"variant": "ai", "content": "Implemented feature b."}]"#,
+    )
+    .unwrap();
+
+    let output_a = repo_a.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("FREEBUFF_CONFIG_DIR", &freebuff_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &[
+            "OPENCODE_SESSION_ID",
+            "FREEBUFF_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+        ],
+    );
+    assert!(output_a.status.success(), "{}", stderr(&output_a));
+    assert_eq!(
+        stdout(&output_a),
+        "feature a prompt\n\nImplemented feature a."
+    );
+
+    let output_b = repo_b.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("FREEBUFF_CONFIG_DIR", &freebuff_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &[
+            "OPENCODE_SESSION_ID",
+            "FREEBUFF_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+        ],
+    );
+    assert!(output_b.status.success(), "{}", stderr(&output_b));
+    assert_eq!(
+        stdout(&output_b),
+        "feature b prompt\n\nImplemented feature b."
+    );
+
+    let _ = fs::remove_dir_all(freebuff_dir);
+    let _ = fs::remove_dir_all(empty_brain);
+}
+
+#[test]
+fn chat_auto_detects_opencode_by_project_path_among_multiple_projects() {
+    let repo_a = Repo::new();
+    repo_a.write("a.txt", "content a\n");
+    repo_a.git(&["add", "a.txt"]);
+
+    let repo_b = Repo::new();
+    repo_b.write("b.txt", "content b\n");
+    repo_b.git(&["add", "b.txt"]);
+
+    let opencode_dir =
+        std::env::temp_dir().join(format!("mm-test-opencode-multi-{}", std::process::id()));
+    let proj_dir = opencode_dir.join("project");
+    let sess_dir = opencode_dir.join("session");
+    fs::create_dir_all(&proj_dir).unwrap();
+    fs::create_dir_all(sess_dir.join("proj-a")).unwrap();
+    fs::create_dir_all(sess_dir.join("proj-b")).unwrap();
+    let empty_brain = std::env::temp_dir().join(format!(
+        "mm-test-empty-brain-opencode-{}",
+        std::process::id()
+    ));
+    fs::create_dir_all(&empty_brain).unwrap();
+
+    let path_a_str = repo_a.path().display().to_string();
+    let path_b_str = repo_b.path().display().to_string();
+
+    fs::write(
+        proj_dir.join("proj-a.json"),
+        format!(r#"{{"id":"proj-a","worktree":"{path_a_str}"}}"#),
+    )
+    .unwrap();
+    fs::write(
+        proj_dir.join("proj-b.json"),
+        format!(r#"{{"id":"proj-b","worktree":"{path_b_str}"}}"#),
+    )
+    .unwrap();
+
+    let export_a = r#"{
+  "info": {"id": "ses-a", "title": "feature a prompt"},
+  "messages": [
+    {
+      "role": "user",
+      "content": [{"type": "text", "text": "feature a prompt"}]
+    },
+    {
+      "role": "assistant",
+      "content": [{"type": "text", "text": "Implemented feature a."}]
+    }
+  ]
+}"#;
+    fs::write(sess_dir.join("proj-a").join("ses-a.json"), export_a).unwrap();
+
+    std::thread::sleep(std::time::Duration::from_millis(50));
+
+    let export_b = r#"{
+  "info": {"id": "ses-b", "title": "feature b prompt"},
+  "messages": [
+    {
+      "role": "user",
+      "content": [{"type": "text", "text": "feature b prompt"}]
+    },
+    {
+      "role": "assistant",
+      "content": [{"type": "text", "text": "Implemented feature b."}]
+    }
+  ]
+}"#;
+    fs::write(sess_dir.join("proj-b").join("ses-b.json"), export_b).unwrap();
+
+    let output_a = repo_a.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("OPENCODE_STORAGE_DIR", &opencode_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &["OPENCODE_SESSION_ID", "ANTIGRAVITY_CONVERSATION_ID"],
+    );
+    assert!(output_a.status.success(), "{}", stderr(&output_a));
+    assert_eq!(
+        stdout(&output_a),
+        "feature a prompt\n\nImplemented feature a."
+    );
+
+    let output_b = repo_b.mm_with_env_and_remove(
+        &["--chat", "--print"],
+        &[
+            ("OPENCODE_STORAGE_DIR", &opencode_dir.to_string_lossy()),
+            ("ANTIGRAVITY_BRAIN_DIR", &empty_brain.to_string_lossy()),
+        ],
+        &["OPENCODE_SESSION_ID", "ANTIGRAVITY_CONVERSATION_ID"],
+    );
+    assert!(output_b.status.success(), "{}", stderr(&output_b));
+    assert_eq!(
+        stdout(&output_b),
+        "feature b prompt\n\nImplemented feature b."
+    );
+
+    let _ = fs::remove_dir_all(opencode_dir);
+    let _ = fs::remove_dir_all(empty_brain);
+}
+
+#[test]
 fn chat_auto_detects_antigravity_when_project_path_is_deep_in_transcript() {
     let repo = Repo::new();
     repo.write("foo.txt", "new\n");
