@@ -223,13 +223,13 @@ mm --freebuff # commit using the latest Freebuff / Codebuff log
 
 The message is built like this:
 
-- Subject:
-  - For OpenCode, the session title is used (or the first line of the latest user prompt, truncated to 72 characters, if untitled).
-  - For Antigravity, the first line of the latest user request (extracted from `<USER_REQUEST>` and stripped of `@` file references) is used, truncated to 72 characters. If absent, the first line of the assistant message is used.
-  - For Claude Code, the first line of the latest user prompt is used, truncated to 72 characters (tool execution results are skipped). If absent, the first line of the assistant message is used.
-  - For Codex, the thread title from `session_index.jsonl` is used if available; otherwise the first line of the latest user prompt is used, truncated to 72 characters. If absent, the first line of the assistant message is used.
-  - For Devin / Codeium, the session title is used if available; otherwise the first line of the latest user prompt is used, truncated to 72 characters. If absent, the first line of the assistant message is used.
-  - For Freebuff / Codebuff, the first user prompt (or session title from `chat-meta.json` if available) is used, truncated to 72 characters. If absent, the first line of the assistant message is used.
+- Subject: The full selected title or first line is preserved unless an explicit commitlint length rule requires shortening.
+  - For OpenCode, the session title is used (or the first line of the latest user prompt, if untitled).
+  - For Antigravity, the first line of the latest user request (extracted from `<USER_REQUEST>` and stripped of `@` file references) is used. If absent, the first line of the assistant message is used.
+  - For Claude Code, the first line of the latest user prompt is used (tool execution results are skipped). If absent, the first line of the assistant message is used.
+  - For Codex, the thread title from `session_index.jsonl` is used if available; otherwise the first line of the latest user prompt is used. If absent, the first line of the assistant message is used.
+  - For Devin / Codeium, the session title is used if available; otherwise the first line of the latest user prompt is used. If absent, the first line of the assistant message is used.
+  - For Freebuff / Codebuff, the first user prompt (or session title from `chat-meta.json` if available) is used. If absent, the first line of the assistant message is used.
 - Body: The last assistant response (`PLANNER_RESPONSE`, Claude Code text message, Codex assistant message/task completion, Devin assistant message, Freebuff assistant message, or OpenCode assistant text message). Tool calls, reasoning/thinking, and metadata are excluded.
 - `--opencode` or `-o` forces copying from OpenCode (`OPENCODE_SESSION_ID`, or a session passed with `--chat-session`).
 - `--agy` or `--antigravity` forces copying from Antigravity logs.

@@ -1871,6 +1871,45 @@ fn copies_codex_last_log_with_codex_flag() {
 }
 
 #[test]
+fn preserves_full_chat_title_in_git_commit_unless_commitlint_limits_it() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", "pub fn hello() {}\n");
+    repo.git(&["add", "src/lib.rs"]);
+
+    let subject = "fix commit titles so the complete sentence is preserved even when it extends beyond seventy two characters";
+    let transcript = format!(
+        r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"{subject}"}}]}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"Preserved the complete title."}}]}}}}
+"#
+    );
+    repo.write("chat.jsonl", &transcript);
+    let session = repo.path().join("chat.jsonl");
+    let session = session.to_str().unwrap();
+
+    let output = repo.mm(&["--codex-session", session]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(repo.latest_subject(), subject);
+    assert!(
+        repo.git(&["log", "-1", "--format=%B"])
+            .contains("Preserved the complete title.")
+    );
+
+    repo.write("src/lib.rs", "pub fn hello() { println!(\"hello\"); }\n");
+    repo.git(&["add", "src/lib.rs"]);
+    repo.write(
+        ".commitlintrc.json",
+        r#"{"rules":{"header-max-length":[2,"always",50],"type-enum":[2,"always",["fix"]]}}"#,
+    );
+    let output = repo.mm(&["--codex-session", session, "--print"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+    let message = stdout(&output);
+    let header = message.lines().next().unwrap();
+    assert!(header.chars().count() <= 50);
+    assert!(header.starts_with("fix: fix commit titles"));
+    assert!(message.ends_with("\n\nPreserved the complete title."));
+}
+
+#[test]
 fn copies_codex_log_with_codex_session() {
     let repo = Repo::new();
     repo.write("foo.txt", "new\n");

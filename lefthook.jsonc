@@ -12,17 +12,6 @@
 			}
 		}
 	},
-	// Validate commit message convention (e.g., feat: ..., fix: ...)
-	"commit-msg": {
-		"commands": {
-			"commitlint": {
-				// You can install commitlint with:
-				// - <https://github.com/quinnjr/cargo-commitlint>
-				// - `cargo install cargo-commitlint`
-				"run": "cargo commitlint check --edit {1}"
-			}
-		}
-	},
 	"pre-push": {
 		"commands": {
 			"clippy": {

@@ -18,8 +18,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde_json::Value;
 
-use crate::policy::truncate;
-
 /// Environment variable OpenCode sets for the current session.
 pub const SESSION_ENV: &str = "OPENCODE_SESSION_ID";
 
@@ -64,9 +62,6 @@ pub const FREEBUFF_HOME_ENV: &str = "FREEBUFF_HOME";
 
 /// Environment variable for Codebuff home directory override (useful for tests).
 pub const CODEBUFF_HOME_ENV: &str = "CODEBUFF_HOME";
-
-/// Longest fallback subject, in characters.
-const FALLBACK_SUBJECT_MAX: usize = 72;
 
 /// Where the subject came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1806,18 +1801,12 @@ pub fn parse_antigravity_reader<R: BufRead>(
     let (subject, subject_source) = match latest_prompt {
         Some(prompt) => {
             let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
-            (
-                truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-                SubjectSource::LatestPrompt,
-            )
+            (sanitized, SubjectSource::LatestPrompt)
         }
         None => {
             let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
             let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
-            (
-                truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-                SubjectSource::LastMessage,
-            )
+            (sanitized, SubjectSource::LastMessage)
         }
     };
 
@@ -2187,18 +2176,12 @@ pub fn parse_claude_reader<R: BufRead>(
     let (subject, subject_source) = match latest_prompt {
         Some(prompt) => {
             let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
-            (
-                truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-                SubjectSource::LatestPrompt,
-            )
+            (sanitized, SubjectSource::LatestPrompt)
         }
         None => {
             let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
             let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
-            (
-                truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-                SubjectSource::LastMessage,
-            )
+            (sanitized, SubjectSource::LastMessage)
         }
     };
 
@@ -2704,17 +2687,11 @@ pub fn parse_codex_reader<R: BufRead>(
         (sanitized, SubjectSource::Title)
     } else if let Some(prompt) = latest_prompt {
         let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
-        (
-            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-            SubjectSource::LatestPrompt,
-        )
+        (sanitized, SubjectSource::LatestPrompt)
     } else {
         let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
         let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
-        (
-            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-            SubjectSource::LastMessage,
-        )
+        (sanitized, SubjectSource::LastMessage)
     };
 
     Ok(ChatMessage {
@@ -3359,17 +3336,11 @@ pub fn parse_devin_reader<R: BufRead>(
         (sanitized, SubjectSource::Title)
     } else if let Some(prompt) = latest_prompt {
         let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
-        (
-            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-            SubjectSource::LatestPrompt,
-        )
+        (sanitized, SubjectSource::LatestPrompt)
     } else {
         let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
         let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
-        (
-            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-            SubjectSource::LastMessage,
-        )
+        (sanitized, SubjectSource::LastMessage)
     };
 
     Ok(ChatMessage {
@@ -3978,20 +3949,14 @@ pub fn parse_freebuff_reader<R: BufRead>(
     let sanitized_body = sanitize_chat_body(&raw_body, repo_root);
 
     let (subject, subject_source) = if let Some(t) = title {
-        (truncate(&t, FALLBACK_SUBJECT_MAX), SubjectSource::Title)
+        (t, SubjectSource::Title)
     } else if let Some(prompt) = latest_prompt {
         let sanitized = sanitize_current_path(&sanitize_file_urls(&prompt), repo_root);
-        (
-            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-            SubjectSource::LatestPrompt,
-        )
+        (sanitized, SubjectSource::LatestPrompt)
     } else {
         let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
         let sanitized = sanitize_current_path(&sanitize_file_urls(&line), repo_root);
-        (
-            truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-            SubjectSource::LastMessage,
-        )
+        (sanitized, SubjectSource::LastMessage)
     };
 
     Ok(ChatMessage {
@@ -4342,18 +4307,12 @@ pub fn parse_with_root(
         None => match latest_prompt {
             Some(prompt) => {
                 let sanitized = sanitize_current_path(&prompt, repo_root);
-                (
-                    truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-                    SubjectSource::LatestPrompt,
-                )
+                (sanitized, SubjectSource::LatestPrompt)
             }
             None => {
                 let line = first_line(&sanitized_body).unwrap_or_else(|| sanitized_body.clone());
                 let sanitized = sanitize_current_path(&line, repo_root);
-                (
-                    truncate(&sanitized, FALLBACK_SUBJECT_MAX),
-                    SubjectSource::LastMessage,
-                )
+                (sanitized, SubjectSource::LastMessage)
             }
         },
     };
@@ -4669,19 +4628,71 @@ mod tests {
     }
 
     #[test]
-    fn truncates_a_long_fallback_subject() {
-        let export = r#"{
-            "info": {},
-            "messages": [
-                { "type": "user", "text": "abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyz" },
-                { "type": "assistant", "content": [{ "type": "text", "text": "the answer" }] }
-            ]
-        }"#;
+    fn preserves_full_long_subjects_across_chat_providers() {
+        let sentence = "Preserve the complete commit title so that the entire sentence remains readable, including its final words and Unicode characters like café.";
+        assert!(sentence.chars().count() > 72);
 
-        let message = parse(export.as_bytes(), "ses_test").unwrap();
+        for from_prompt in [true, false] {
+            let prompt = if from_prompt { sentence } else { "" };
+            let body = if from_prompt {
+                "Implemented the change."
+            } else {
+                sentence
+            };
+            let transcripts = [
+                format!(
+                    r#"{{"messages":[{{"type":"user","text":"{prompt}"}},{{"type":"assistant","text":"{body}"}}]}}"#
+                ),
+                format!(
+                    r#"{{"source":"USER","type":"USER_INPUT","content":"{prompt}"}}
+{{"source":"MODEL","type":"PLANNER_RESPONSE","content":"{body}"}}"#
+                ),
+                format!(
+                    r#"{{"type":"user","message":{{"role":"user","content":"{prompt}"}}}}
+{{"type":"assistant","message":{{"role":"assistant","content":"{body}"}}}}"#
+                ),
+                format!(
+                    r#"{{"type":"response_item","payload":{{"type":"message","role":"user","content":[{{"type":"input_text","text":"{prompt}"}}]}}}}
+{{"type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"{body}"}}]}}}}"#
+                ),
+                format!(
+                    r#"{{"role":"user","content":"{prompt}"}}
+{{"role":"assistant","content":"{body}"}}"#
+                ),
+                format!(
+                    r#"[{{"variant":"user","content":"{prompt}"}},{{"variant":"ai","content":"{body}"}}]"#
+                ),
+            ];
+            let messages = [
+                parse(transcripts[0].as_bytes(), "test"),
+                parse_antigravity(transcripts[1].as_bytes(), "test"),
+                parse_claude(transcripts[2].as_bytes(), "test"),
+                parse_codex(transcripts[3].as_bytes(), "test", None),
+                parse_devin(transcripts[4].as_bytes(), "test"),
+                parse_freebuff(transcripts[5].as_bytes(), "test"),
+            ];
+            for message in messages {
+                let message = message.unwrap();
+                assert_eq!(message.subject, sentence);
+                assert_eq!(message.body, body);
+                assert_eq!(
+                    message.subject_source,
+                    if from_prompt {
+                        SubjectSource::LatestPrompt
+                    } else {
+                        SubjectSource::LastMessage
+                    }
+                );
+            }
+        }
 
-        assert_eq!(message.subject.chars().count(), FALLBACK_SUBJECT_MAX);
-        assert!(message.subject.ends_with("..."));
+        let transcript = serde_json::json!({
+            "title": sentence,
+            "messages": [{"variant": "ai", "content": "Implemented the change."}]
+        });
+        let message = parse_freebuff(transcript.to_string().as_bytes(), "test").unwrap();
+        assert_eq!(message.subject, sentence);
+        assert_eq!(message.subject_source, SubjectSource::Title);
     }
 
     #[test]
