@@ -1623,6 +1623,117 @@ fn find_antigravity_log_from_transcripts(
     Some((name, log_path))
 }
 
+/// A transcript offered by the interactive session picker.
+pub struct SessionChoice {
+    pub id: String,
+    pub path: PathBuf,
+    pub label: String,
+}
+
+/// List the five most recently modified transcripts for an agent.
+pub fn recent_sessions(agent: Agent) -> Vec<SessionChoice> {
+    let mut candidates: Vec<(SystemTime, String, PathBuf)> = Vec::new();
+    match agent {
+        Agent::Antigravity => {
+            for brain in antigravity_brain_dirs() {
+                if let Ok(entries) = fs::read_dir(brain) {
+                    for entry in entries.flatten() {
+                        let dir = entry.path();
+                        let mut path = dir.join(".system_generated/logs/transcript.jsonl");
+                        if !path.is_file() {
+                            path = dir.join("transcript.jsonl");
+                        }
+                        if path.is_file() {
+                            let modified = fs::metadata(&path)
+                                .and_then(|m| m.modified())
+                                .unwrap_or(UNIX_EPOCH);
+                            candidates.push((
+                                modified,
+                                entry.file_name().to_string_lossy().into_owned(),
+                                path,
+                            ));
+                        }
+                    }
+                }
+            }
+        }
+        Agent::Codex => {
+            if let Some(home) = codex_home_dir() {
+                let mut files = Vec::new();
+                collect_codex_files(&home.join("sessions"), &mut files);
+                for (modified, path) in files {
+                    if let Some((Some(id), _)) = peek_codex_meta(&path) {
+                        candidates.push((modified, id, path));
+                    }
+                }
+            }
+        }
+        _ => return Vec::new(),
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    let mut seen = std::collections::HashSet::new();
+    candidates
+        .into_iter()
+        .filter(|(_, id, _)| seen.insert(id.clone()))
+        .take(5)
+        .map(|(_, id, path)| {
+            let title = if agent == Agent::Codex {
+                codex_home_dir().and_then(|home| load_codex_thread_name(&home, &id))
+            } else {
+                None
+            };
+            let label = title
+                .or_else(|| {
+                    first_session_prompt(agent, &path).map(|text| text.chars().take(32).collect())
+                })
+                .unwrap_or_else(|| "(no title or user prompt)".to_string());
+            SessionChoice { id, path, label }
+        })
+        .collect()
+}
+
+fn first_session_prompt(agent: Agent, path: &Path) -> Option<String> {
+    let reader: Box<dyn BufRead> = match agent {
+        Agent::Codex => Box::new(open_codex_file(path).ok()?),
+        Agent::Antigravity => Box::new(std::io::BufReader::new(fs::File::open(path).ok()?)),
+        _ => return None,
+    };
+    for line in reader.lines().map_while(Result::ok) {
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        let text = match agent {
+            Agent::Codex
+                if value.get("type").and_then(Value::as_str) == Some("response_item")
+                    && value.pointer("/payload/type").and_then(Value::as_str)
+                        == Some("message")
+                    && value.pointer("/payload/role").and_then(Value::as_str) == Some("user") =>
+            {
+                value.get("payload").and_then(extract_codex_text)
+            }
+            Agent::Antigravity
+                if matches!(
+                    value.get("source").and_then(Value::as_str),
+                    Some("USER" | "USER_EXPLICIT")
+                ) && value.get("type").and_then(Value::as_str) == Some("USER_INPUT") =>
+            {
+                value
+                    .get("content")
+                    .and_then(Value::as_str)
+                    .map(extract_user_request)
+            }
+            _ => None,
+        };
+        if let Some(text) = text
+            .and_then(|text| first_line(&text))
+            .filter(|text| !text.trim().is_empty())
+        {
+            return Some(sanitize_file_urls(&clean_prompt_line(&text)));
+        }
+    }
+    None
+}
+
 /// Resolve an Antigravity conversation by session ID, folder name, or file path.
 pub fn resolve_antigravity_session(session: &str) -> Option<(String, PathBuf)> {
     let path = Path::new(session);

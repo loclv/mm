@@ -2526,3 +2526,59 @@ fn copies_chat_log_sanitizing_filler_tool_calls_and_ansi() {
 
     let _ = fs::remove_dir_all(brain);
 }
+
+#[test]
+fn recent_session_pickers_select_the_requested_transcript() {
+    use std::io::Write;
+    use std::process::Stdio;
+    let repo = Repo::new();
+    repo.write("change.rs", "change");
+    repo.git(&["add", "change.rs"]);
+    let codex = repo.path().join("codex");
+    let sessions = codex.join("sessions");
+    fs::create_dir_all(&sessions).unwrap();
+    fs::write(sessions.join("rollout-one.jsonl"), concat!(
+        "{\"type\":\"session_meta\",\"payload\":{\"id\":\"one\"}}\n",
+        "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"user\",\"content\":[{\"text\":\"First prompt\"}]}}\n",
+        "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[{\"text\":\"Selected answer\"}]}}\n"
+    )).unwrap();
+    let brain = repo.path().join("brain");
+    fs::create_dir_all(brain.join("agy-one")).unwrap();
+    fs::write(
+        brain.join("agy-one/transcript.jsonl"),
+        concat!(
+            "{\"source\":\"USER\",\"type\":\"USER_INPUT\",\"content\":\"First agy prompt\"}\n",
+            "{\"source\":\"MODEL\",\"type\":\"PLANNER_RESPONSE\",\"content\":\"Agy answer\"}\n"
+        ),
+    )
+    .unwrap();
+    for (flag, expected_id, expected_body) in [
+        ("-cs", "one", "Selected answer"),
+        ("-as", "agy-one", "Agy answer"),
+    ] {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_mm"))
+            .args([flag, "--print"])
+            .current_dir(repo.path())
+            .env("CODEX_HOME", &codex)
+            .env("ANTIGRAVITY_BRAIN_DIR", &brain)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(b"1\n").unwrap();
+        let output = child.wait_with_output().unwrap();
+        assert!(output.status.success(), "{}", stderr(&output));
+        assert!(stderr(&output).contains(expected_id));
+        assert!(stdout(&output).contains(expected_body));
+    }
+    let output = Command::new(env!("CARGO_BIN_EXE_mm"))
+        .args(["-cs", "--print"])
+        .current_dir(repo.path())
+        .env("CODEX_HOME", &codex)
+        .stdin(Stdio::null())
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(stderr(&output).contains("invalid session selection"));
+}

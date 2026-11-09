@@ -88,10 +88,12 @@ mm # generate and commit
 | `--chat-session <ID>` | Use a specific session ID or transcript path; implies `--chat` |
 | `-o`, `--opencode` | Copy the OpenCode session title and last message; implies `--chat` |
 | `--agy`, `--antigravity` | Copy the Antigravity last log commit message; implies `--chat` |
+| `-as` | Choose one of the five most recent Antigravity sessions |
 | `--agy-session <ID>` | Use a specific Antigravity conversation or transcript; implies `--agy` |
 | `--claude` | Copy the Claude Code last log commit message; implies `--chat` |
 | `--claude-session <ID>` | Use a specific Claude Code session or transcript; implies `--claude` |
 | `--codex` | Copy the Codex last log commit message; implies `--chat` |
+| `-cs` | Choose one of the five most recent Codex sessions |
 | `--codex-session <ID>` | Use a specific Codex session or transcript; implies `--codex` |
 | `--devin`, `--codeium` | Copy the Devin / Codeium Cascade last log commit message; implies `--chat` |
 | `--devin-session <ID>` | Use a specific Devin or Cascade session or transcript; implies `--devin` |
@@ -334,3 +336,5 @@ Check that `~/.cargo/bin` is in `PATH`, then start a new zsh session or run
 An old `ac` command still exists
 This tool was renamed to `mm`. Reinstall with the command above; any previously
 installed `ac` binary is separate and must be removed manually.
+
+Use `mm -cs --print` or `mm -as --print` to choose a recent Codex or Antigravity session and preview its message. The picker displays each session ID and its title or the first 32 characters of its first user prompt. Enter its number to select it. Sessions are ordered by transcript modification time across all projects. Omit `--print` to commit.

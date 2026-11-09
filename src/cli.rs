@@ -42,6 +42,8 @@ pub struct Options {
     pub agent: Option<chat::Agent>,
     /// Chat session or conversation ID to copy; implies `chat`.
     pub chat_session: Option<String>,
+    /// Prompt to choose a recent session.
+    pub pick_session: bool,
     /// Explicit commitlint configuration file.
     pub config: Option<PathBuf>,
     /// Never fall back to unstaged changes.
@@ -90,10 +92,12 @@ Options:
       --chat-session <ID> # Use a specific session ID or transcript path (implies --chat)
       -o, --opencode # Copy the OpenCode session title and last message (implies --chat)
       --agy, --antigravity # Copy the Antigravity last log commit message (implies --chat)
+      -as # Choose from the five most recent Antigravity sessions
       --agy-session <ID> # Use a specific Antigravity conversation (implies --agy)
       --claude # Copy the Claude Code last log commit message (implies --chat)
       --claude-session <ID> # Use a specific Claude Code session (implies --claude)
       --codex # Copy the Codex last log commit message (implies --chat)
+      -cs # Choose from the five most recent Codex sessions
       --codex-session <ID> # Use a specific Codex session (implies --codex)
       --devin, --codeium # Copy the Devin / Codeium last log commit message (implies --chat)
       --devin-session <ID> # Use a specific Devin / Codeium session (implies --devin)
@@ -157,6 +161,14 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             "-s" | "--staged" | "--staged-only" => options.staged_only = true,
             "--chat" | "--from-chat" => options.chat = true,
             "-o" | "--opencode" => select_agent(&mut options, chat::Agent::OpenCode),
+            "-as" => {
+                select_agent(&mut options, chat::Agent::Antigravity);
+                options.pick_session = true;
+            }
+            "-cs" => {
+                select_agent(&mut options, chat::Agent::Codex);
+                options.pick_session = true;
+            }
             "--agy" | "--antigravity" => select_agent(&mut options, chat::Agent::Antigravity),
             "--agy-session" => {
                 index += 1;
@@ -321,6 +333,43 @@ pub fn run(args: &[String]) -> Result<(), String> {
 
 /// Generate the message and optionally commit it.
 pub fn execute(options: &Options) -> Result<(), String> {
+    let mut selected_options = options.clone();
+    if selected_options.pick_session {
+        use std::io::Write;
+        let agent = selected_options.agent.ok_or("no agent selected")?;
+        let sessions = chat::recent_sessions(agent);
+        if sessions.is_empty() {
+            return Err("no recent sessions found".to_string());
+        }
+        for (index, session) in sessions.iter().enumerate() {
+            eprintln!("{}: {} [{}]", index + 1, session.label, session.id);
+        }
+        eprint!("Choose a session (1-{}): ", sessions.len());
+        std::io::stderr()
+            .flush()
+            .map_err(|e| format!("could not display prompt: {e}"))?;
+        let mut input = String::new();
+        std::io::stdin()
+            .read_line(&mut input)
+            .map_err(|e| format!("could not read selection: {e}"))?;
+        let index = input
+            .trim()
+            .parse::<usize>()
+            .ok()
+            .and_then(|n| n.checked_sub(1))
+            .filter(|&n| n < sessions.len())
+            .ok_or("invalid session selection")?;
+        let chosen = &sessions[index];
+        // Validate before staging, and never silently commit a fallback for a chosen session.
+        chat::load(
+            Some(&chosen.path.to_string_lossy()),
+            None,
+            Some(agent),
+            selected_options.verbose,
+        )?;
+        selected_options.chat_session = Some(chosen.path.to_string_lossy().into_owned());
+    }
+    let options = &selected_options;
     let git = Git::discover(options.verbose)?;
 
     if options.verbose {
@@ -554,6 +603,7 @@ mod tests {
                 chat: false,
                 agent: None,
                 chat_session: None,
+                pick_session: false,
                 config: None,
                 staged_only: true,
                 no_verify: true,
