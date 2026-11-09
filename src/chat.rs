@@ -1692,6 +1692,52 @@ pub fn recent_sessions(agent: Agent) -> Vec<SessionChoice> {
         .collect()
 }
 
+/// List recent OpenCode sessions in the current project using its CLI.
+pub fn recent_opencode_sessions() -> Result<Vec<SessionChoice>, String> {
+    let output = Command::new("opencode")
+        .args(["session", "list", "--format", "json", "--max-count", "5"])
+        .output()
+        .map_err(|e| format!("could not list OpenCode sessions: {e}"))?;
+    if !output.status.success() {
+        return Err(format!(
+            "could not list OpenCode sessions: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+    let entries: Vec<Value> = serde_json::from_slice(&output.stdout)
+        .map_err(|e| format!("invalid OpenCode session list: {e}"))?;
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| {
+            let id = entry.get("id").and_then(Value::as_str)?.to_string();
+            let title = entry
+                .get("title")
+                .and_then(Value::as_str)
+                .map(single_line)
+                .filter(|s| !s.is_empty() && !is_placeholder_title(s));
+            let label = title
+                .or_else(|| {
+                    let export = export_session(&id).ok()?;
+                    let value: Value = serde_json::from_slice(&export).ok()?;
+                    value
+                        .get("messages")?
+                        .as_array()?
+                        .iter()
+                        .filter(|m| message_kind(m) == "user")
+                        .find_map(|m| user_text(m).and_then(|text| first_line(&text)))
+                        .map(|text| sanitize_file_urls(&text).chars().take(32).collect())
+                })
+                .unwrap_or_else(|| "(no title or user prompt)".to_string());
+            Some(SessionChoice {
+                path: PathBuf::from(&id),
+                id,
+                label: sanitize_file_urls(&label),
+            })
+        })
+        .take(5)
+        .collect())
+}
+
 fn first_session_prompt(agent: Agent, path: &Path) -> Option<String> {
     let reader: Box<dyn BufRead> = match agent {
         Agent::Codex => Box::new(open_codex_file(path).ok()?),

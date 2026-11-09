@@ -118,6 +118,9 @@ when running without any staged changes. To disable this, set `"autoAdd": false`
 ```sh
 mm --chat --print # preview the message (auto-detects OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff)
 mm --opencode --print # preview message from the current OpenCode session
+mm -os --print # choose a recent OpenCode session and preview
+mm -cs --print # choose a recent Codex session and preview
+mm -as --print # choose a recent Antigravity session and preview
 mm --agy --print # preview message from the latest Antigravity log
 mm --claude --print # preview message from the latest Claude Code log
 mm --codex --print # preview message from the latest Codex log
@@ -132,6 +135,7 @@ mm --freebuff # commit using the latest Freebuff / Codebuff log
 - Codex: Transcript logs from `~/.codex/sessions/` (or `CODEX_SESSION_ID`) are read. The subject is the thread title from `session_index.jsonl` (or latest user prompt line), and the body is the last assistant response.
 - Devin / Codeium: Devin ATIF JSON/JSONL transcripts and Codeium Windsurf Cascade trajectory markdown files from `~/.local/share/devin/cli/transcripts`, `~/.config/devin`, `~/.devin`, `~/.codeium/windsurf/cascade` (or `DEVIN_HOME`, `DEVIN_SESSION_ID`) are read. The subject is the session title or latest user prompt line, and the body is the last assistant text response.
 - Freebuff / Codebuff: Chat transcripts from `~/.config/manicode/projects/<project>/chats/<chat-id>/chat-messages.json` (or `FREEBUFF_CONFIG_DIR`, `CODEBUFF_CONFIG_DIR`, `FREEBUFF_HOME`, or `FREEBUFF_SESSION_ID`) are read. The subject is the first user prompt line (or session title from `chat-meta.json`), and the body is the last assistant text response.
+- `-os`, `-cs`, and `-as` let you choose from the five most recent OpenCode, Codex, or Antigravity sessions. The picker shows the session ID and title (or the first 32 characters of its first user prompt). OpenCode lists the current project; Codex and Antigravity list all projects. Add `--print` to preview without committing.
 - `--agy-session <ID>`, `--claude-session <ID>`, `--codex-session <ID>`, `--devin-session <ID>`, `--freebuff-session <ID>`, or `--chat-session <ID>` selects a specific session or transcript path.
 - `--message` overrides the subject; the copied message remains the body.
 - User file URIs like `file:///Users/user/...` are sanitized to `~/...` to prevent leaking local user names, and references to the current repository directory are sanitized to `./`.

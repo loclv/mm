@@ -86,6 +86,7 @@ mm # generate and commit
 | `-m`, `--message <MSG>` | Merge the generated description with an existing message, or override the chat subject |
 | `--chat` | Copy the chat title and last message (OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff) |
 | `--chat-session <ID>` | Use a specific session ID or transcript path; implies `--chat` |
+| `-os` | Choose one of the five most recent OpenCode sessions in the current project |
 | `-o`, `--opencode` | Copy the OpenCode session title and last message; implies `--chat` |
 | `--agy`, `--antigravity` | Copy the Antigravity last log commit message; implies `--chat` |
 | `-as` | Choose one of the five most recent Antigravity sessions |
@@ -337,4 +338,4 @@ An old `ac` command still exists
 This tool was renamed to `mm`. Reinstall with the command above; any previously
 installed `ac` binary is separate and must be removed manually.
 
-Use `mm -cs --print` or `mm -as --print` to choose a recent Codex or Antigravity session and preview its message. The picker displays each session ID and its title or the first 32 characters of its first user prompt. Enter its number to select it. Sessions are ordered by transcript modification time across all projects. Omit `--print` to commit.
+Use `mm -os --print`, `mm -cs --print`, or `mm -as --print` to choose a recent OpenCode, Codex, or Antigravity session and preview its message. The picker displays each session ID and its title or the first 32 characters of its first user prompt. Enter its number to select it. OpenCode sessions are listed for the current project, newest first. Codex and Antigravity sessions are ordered by transcript modification time across all projects. Omit `--print` to commit.

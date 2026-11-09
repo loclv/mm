@@ -71,7 +71,7 @@ _mm() {
     fi
 
     local opts="\
--a --add -e --edit -p --print -d --dry-run -as -cs \
+-a --add -e --edit -p --print -d --dry-run -as -cs -os \
 -m --message --chat --chat-session -o --opencode --agy --antigravity --agy-session \
 --claude --claude-session --codex --codex-session \
 --devin --codeium --devin-session --codeium-session \

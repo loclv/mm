@@ -90,6 +90,7 @@ Options:
   -m, --message <MSG> # Merge the generated description (or override a chat subject)
       --chat # Copy the chat title and last message (OpenCode, Antigravity, Claude Code, Codex, Devin, or Freebuff)
       --chat-session <ID> # Use a specific session ID or transcript path (implies --chat)
+      -os # Choose from the five most recent OpenCode sessions
       -o, --opencode # Copy the OpenCode session title and last message (implies --chat)
       --agy, --antigravity # Copy the Antigravity last log commit message (implies --chat)
       -as # Choose from the five most recent Antigravity sessions
@@ -161,6 +162,10 @@ pub fn parse_args(args: &[String]) -> Result<Command, String> {
             "-s" | "--staged" | "--staged-only" => options.staged_only = true,
             "--chat" | "--from-chat" => options.chat = true,
             "-o" | "--opencode" => select_agent(&mut options, chat::Agent::OpenCode),
+            "-os" => {
+                select_agent(&mut options, chat::Agent::OpenCode);
+                options.pick_session = true;
+            }
             "-as" => {
                 select_agent(&mut options, chat::Agent::Antigravity);
                 options.pick_session = true;
@@ -337,7 +342,11 @@ pub fn execute(options: &Options) -> Result<(), String> {
     if selected_options.pick_session {
         use std::io::Write;
         let agent = selected_options.agent.ok_or("no agent selected")?;
-        let sessions = chat::recent_sessions(agent);
+        let sessions = if agent == chat::Agent::OpenCode {
+            chat::recent_opencode_sessions()?
+        } else {
+            chat::recent_sessions(agent)
+        };
         if sessions.is_empty() {
             return Err("no recent sessions found".to_string());
         }

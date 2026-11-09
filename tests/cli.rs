@@ -2582,3 +2582,45 @@ fn recent_session_pickers_select_the_requested_transcript() {
     assert!(!output.status.success());
     assert!(stderr(&output).contains("invalid session selection"));
 }
+
+#[cfg(unix)]
+#[test]
+fn opencode_session_picker_exports_the_selected_session() {
+    use std::io::Write;
+    use std::os::unix::fs::PermissionsExt;
+    use std::process::Stdio;
+    let repo = Repo::new();
+    repo.write("change.rs", "change");
+    repo.git(&["add", "change.rs"]);
+    let bin = repo.path().join("bin");
+    fs::create_dir_all(&bin).unwrap();
+    let script = bin.join("opencode");
+    fs::write(&script, r##"#!/bin/sh
+if [ "$2" = list ]; then
+  printf '%s' '[{"id":"first","title":"First session"},{"id":"second","title":"Second session"}]'
+else
+  printf '{"info":{"title":"Chosen %s"},"messages":[{"role":"assistant","content":[{"type":"text","text":"Selected response"}]}]}' "$3"
+fi
+"##).unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    let path = format!(
+        "{}:{}",
+        bin.display(),
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mm"))
+        .args(["-os", "--print"])
+        .current_dir(repo.path())
+        .env("PATH", path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(b"2\n").unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert!(stderr(&output).contains("Second session [second]"));
+    assert!(stdout(&output).contains("Chosen second"));
+    assert!(stdout(&output).contains("Selected response"));
+}
