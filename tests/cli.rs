@@ -87,6 +87,21 @@ impl Repo {
         let mut command = Command::new(env!("CARGO_BIN_EXE_mm"));
         command.args(args).current_dir(&self.path);
 
+        // A developer's active assistant session must not override fixture discovery.
+        // Tests can still select a session explicitly through `envs` below.
+        for key in [
+            "OPENCODE_SESSION_ID",
+            "ANTIGRAVITY_CONVERSATION_ID",
+            "GEMINI_CONVERSATION_ID",
+            "CLAUDE_SESSION_ID",
+            "CODEX_SESSION_ID",
+            "DEVIN_SESSION_ID",
+            "FREEBUFF_SESSION_ID",
+            "CODEBUFF_SESSION_ID",
+        ] {
+            command.env_remove(key);
+        }
+
         for (key, value) in envs {
             command.env(key, value);
         }

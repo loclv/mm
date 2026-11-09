@@ -109,7 +109,8 @@ impl Agent {
     ];
 
     /// Agents that keep transcripts on disk, in auto-detection order.
-    const LOCAL: [Agent; 5] = [
+    const LOCAL: [Agent; 6] = [
+        Agent::OpenCode,
         Agent::Antigravity,
         Agent::Claude,
         Agent::Codex,
@@ -156,7 +157,7 @@ impl Agent {
     /// Find transcript on disk matching a specific repository root.
     fn find_matching(self, repo_root: &Path) -> Option<(String, PathBuf)> {
         match self {
-            Agent::OpenCode => None,
+            Agent::OpenCode => find_matching_opencode_log(repo_root),
             Agent::Antigravity => find_matching_antigravity_log(repo_root),
             Agent::Claude => find_matching_claude_log(repo_root),
             Agent::Codex => find_matching_codex_log(repo_root),
@@ -191,7 +192,15 @@ impl Agent {
             Agent::Devin => load_devin(path, session_id, repo_root),
             Agent::Freebuff => load_freebuff(path, session_id, repo_root),
             Agent::OpenCode => {
-                Err("OpenCode sessions are exported, not read from disk".to_string())
+                let bytes =
+                    fs::read(path).map_err(|e| format!("could not read OpenCode session: {e}"))?;
+                let value: Value = serde_json::from_slice(&bytes)
+                    .map_err(|e| format!("invalid OpenCode session: {e}"))?;
+                if value.get("messages").is_some() {
+                    parse_with_root(&bytes, session_id, repo_root)
+                } else {
+                    load_opencode(Some(session_id), repo_root, false)
+                }
             }
         }
     }
@@ -4285,6 +4294,59 @@ fn load_agent(
 
     announce(agent, &id, &path, verbose);
     agent.parse(&path, &id, repo_root)
+}
+
+/// Find the newest stored OpenCode session belonging to this repository.
+fn find_matching_opencode_log(root: &Path) -> Option<(String, PathBuf)> {
+    let storage = std::env::var_os("OPENCODE_STORAGE_DIR")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("XDG_DATA_HOME")
+                .map(PathBuf::from)
+                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/share")))
+                .map(|dir| dir.join("opencode/storage"))
+        })?;
+    let canonical_root = fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf());
+    let mut candidates = Vec::new();
+    for entry in fs::read_dir(storage.join("project")).ok()?.flatten() {
+        let Ok(bytes) = fs::read(entry.path()) else {
+            continue;
+        };
+        let Ok(project) = serde_json::from_slice::<Value>(&bytes) else {
+            continue;
+        };
+        let Some(worktree) = project.get("worktree").and_then(Value::as_str) else {
+            continue;
+        };
+        let worktree = PathBuf::from(worktree);
+        if fs::canonicalize(&worktree).unwrap_or(worktree) != canonical_root {
+            continue;
+        }
+        let Some(id) = project.get("id").and_then(Value::as_str) else {
+            continue;
+        };
+        let Ok(sessions) = fs::read_dir(storage.join("session").join(id)) else {
+            continue;
+        };
+        for session in sessions.flatten() {
+            let path = session.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                continue;
+            }
+            let Some(id) = path.file_stem().and_then(|stem| stem.to_str()) else {
+                continue;
+            };
+            let modified = fs::metadata(&path)
+                .and_then(|m| m.modified())
+                .unwrap_or(UNIX_EPOCH);
+            candidates.push((modified, id.to_string(), path));
+        }
+    }
+    candidates.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.cmp(&b.1)));
+    candidates
+        .into_iter()
+        .next()
+        .map(|(_, id, path)| (id, path))
 }
 
 /// Load the current OpenCode session through `opencode session export`.

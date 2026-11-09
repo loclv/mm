@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## 0.2.8 - 2026-11-10
+
+- Restore OpenCode project storage discovery before falling back to unrelated chat logs.
+- Isolate CLI tests from inherited assistant session selectors.
+- Use a supported Intel macOS runner for release builds.
+
 ## 2026-10-28
 
 ### Changes
