@@ -24,6 +24,17 @@ Always ensure the entire test suite, code formatting, and clippy pass cleanly be
 
 Do not proceed if any check fails.
 
+## Automated patch release
+
+Run `cargo run --example release` from a clean Git working tree to prepare the
+next patch release. The helper runs `./test.sh`, increments the package patch
+version, updates `Cargo.lock` with `cargo check`, commits those two files, and
+creates an annotated `release-v<version>` tag on that commit. It stops on
+errors and does not push, install, update the changelog, or publish. If a step
+after the version update fails, inspect the working tree and Git history before
+retrying. Review the release, update the changelog as needed, and push the
+commit and tag using the steps below.
+
 ## 2. Version Bump
 
 Update the version number in [Cargo.toml](file:///Users/a0/w/auto-commit/rust/Cargo.toml):
