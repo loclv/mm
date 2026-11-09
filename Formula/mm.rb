@@ -31,6 +31,6 @@ class Mm < Formula
   end
 
   test do
-    assert_match "Generate a Conventional Commit message", shell_output("#{bin}/mm --help")
+    assert_match "mm - commit with an automatically generated message", shell_output("#{bin}/mm --help")
   end
 end
