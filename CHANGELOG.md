@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## 0.2.9 - 2026-11-10
+
+- Fix release tag parsing and configure release notes from this changelog.
+- Includes the OpenCode discovery and release runner fixes prepared in 0.2.8.
+
 ## 0.2.8 - 2026-11-10
 
 - Restore OpenCode project storage discovery before falling back to unrelated chat logs.
