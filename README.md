@@ -23,9 +23,9 @@ can copy the session/prompt and last assistant message instead; see
 
 ## Problems
 
-- Ask AI Agents, LLMs to commit changes is waste of tokens.
-- Commit messages already is logs from AI Agent.
-- Simple create, update, delete a file not worth for AI Agent.
+- Asking AI agents/LLMs to commit changes is a waste of tokens.
+- Commit messages are already in the logs from the AI Agent.
+- Simple create, update, delete of a file is not worth it for an AI Agent.
 
 ## Install
 
