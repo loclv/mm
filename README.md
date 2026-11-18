@@ -27,6 +27,39 @@ can copy the session/prompt and last assistant message instead; see
 - Commit messages are already in the logs from the AI Agent.
 - Simple create, update, delete of a file is not worth it for an AI Agent.
 
+## Examples
+
+### Example 1: Basic usage, generate simple commit message for simple file changes
+
+```diff
+--- a/README.md
++++ b/README.md
+```
+
+```bash
+mm
+```
+
+git commit message output: "docs: update README.md".
+
+### Example 2: Copy AI chat session
+
+```bash
+mm --agy
+```
+
+git commit message output:
+
+```md
+docs: support ...
+
+Support for ...
+
+### Summary of Changes
+
+...
+```
+
 ## Install
 
 ### Homebrew (macOS & Linux)
