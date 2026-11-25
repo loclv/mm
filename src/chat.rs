@@ -824,18 +824,13 @@ fn is_tool_marker_line(trimmed: &str) -> bool {
         }
     }
 
-    if lower.starts_with('{')
+    lower.starts_with('{')
         && lower.ends_with('}')
         && ((lower.contains("\"name\":")
             && (lower.contains("\"arguments\":") || lower.contains("\"parameters\":")))
             || lower.contains("\"tool\":")
             || lower.contains("\"tool_name\":")
             || lower.contains("\"tool_input\":"))
-    {
-        return true;
-    }
-
-    false
 }
 
 /// Strip tool call residue (XML tags, tool code blocks, and ReAct/CLI markers).
@@ -3176,7 +3171,6 @@ pub fn devin_transcripts_dirs() -> Vec<PathBuf> {
         dirs.push(home.join(".config").join("devin").join("transcripts"));
         dirs.push(home.join(".devin").join("transcripts"));
         dirs.push(home.join(".devin").join("sessions"));
-        dirs.push(home.join(".devin"));
         dirs.push(home.join(".codeium").join("windsurf").join("cascade"));
     }
 
@@ -3188,6 +3182,163 @@ pub fn devin_transcripts_dirs() -> Vec<PathBuf> {
 
     dirs.retain(|d| d.is_dir());
     dirs
+}
+
+/// Candidate Devin CLI SQLite session databases.
+pub fn devin_session_db_paths() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+
+    if let Ok(db) = std::env::var("DEVIN_SESSIONS_DB").or_else(|_| std::env::var("DEVIN_DB_PATH")) {
+        let path = PathBuf::from(db);
+        if path.is_file() && !paths.contains(&path) {
+            paths.push(path);
+        }
+    }
+
+    if let Ok(dir) = std::env::var(DEVIN_HOME_ENV) {
+        let base = PathBuf::from(dir);
+        for rel in ["cli/sessions.db", "sessions.db"] {
+            let path = base.join(rel);
+            if path.is_file() && !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+
+    if std::env::var(DEVIN_HOME_ENV).is_err()
+        && let Some(home) = std::env::var_os("HOME").map(PathBuf::from)
+    {
+        for rel in [
+            ".local/share/devin/cli/sessions.db",
+            ".local/share/devin/sessions.db",
+            ".config/devin/cli/sessions.db",
+            ".config/devin/sessions.db",
+        ] {
+            let path = home.join(rel);
+            if path.is_file() && !paths.contains(&path) {
+                paths.push(path);
+            }
+        }
+    }
+
+    paths
+}
+
+/// Query Devin session rows from a SQLite database using the sqlite3 CLI.
+fn query_devin_sessions(db: &Path) -> Vec<Value> {
+    let output = Command::new("sqlite3")
+        .arg("-json")
+        .arg(db)
+        .arg("SELECT id, working_directory, title, last_activity_at FROM sessions WHERE COALESCE(hidden, 0) = 0 ORDER BY last_activity_at DESC;")
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    serde_json::from_str(trimmed).unwrap_or_default()
+}
+
+/// Query Devin message nodes from a SQLite database using the sqlite3 CLI.
+fn query_devin_messages(db: &Path, session_id: &str) -> Vec<Value> {
+    let escaped = session_id.replace('\'', "''");
+    let sql = format!(
+        "SELECT chat_message FROM message_nodes WHERE session_id = '{escaped}' ORDER BY row_id;"
+    );
+    let output = Command::new("sqlite3")
+        .arg("-json")
+        .arg(db)
+        .arg(&sql)
+        .output();
+    let Ok(output) = output else {
+        return Vec::new();
+    };
+    if !output.status.success() {
+        return Vec::new();
+    }
+    let text = String::from_utf8_lossy(&output.stdout);
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+    let rows: Vec<Value> = serde_json::from_str(trimmed).unwrap_or_default();
+    let mut messages = Vec::new();
+    for row in rows {
+        if let Some(chat_message) = row.get("chat_message").and_then(Value::as_str)
+            && let Ok(value) = serde_json::from_str::<Value>(chat_message)
+        {
+            messages.push(value);
+        }
+    }
+    messages
+}
+
+/// Whether a Devin session's working directory matches the repository root.
+fn devin_db_session_matches_root(working_directory: &str, root: &Path) -> bool {
+    let patterns = repo_root_patterns(root);
+    patterns.iter().any(|pattern| {
+        working_directory == pattern
+            || working_directory.starts_with(&format!("{pattern}/"))
+            || pattern.starts_with(&format!("{working_directory}/"))
+    })
+}
+
+/// Load a Devin session from a SQLite database.
+pub fn load_devin_db(
+    db: &Path,
+    session_id: &str,
+    repo_root: Option<&Path>,
+) -> Result<ChatMessage, String> {
+    let sessions = query_devin_sessions(db);
+    let session = if session_id.is_empty() || session_id == "devin" || session_id == "cascade" {
+        sessions.first()
+    } else {
+        sessions
+            .iter()
+            .find(|row| row.get("id").and_then(Value::as_str) == Some(session_id))
+    };
+
+    let Some(session) = session else {
+        return Err(format!(
+            "Devin session `{session_id}` not found in {}",
+            db.display()
+        ));
+    };
+
+    let id = session
+        .get("id")
+        .and_then(Value::as_str)
+        .unwrap_or(session_id)
+        .to_string();
+    let title = session
+        .get("title")
+        .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|value| !value.is_empty() && !is_placeholder_title(value))
+        .map(ToString::to_string);
+
+    let messages = query_devin_messages(db, &id);
+    let mut transcript = serde_json::json!({
+        "session_id": id,
+        "title": title,
+        "steps": messages,
+    });
+    if title.is_none() {
+        transcript
+            .as_object_mut()
+            .expect("transcript object")
+            .remove("title");
+    }
+
+    let bytes = serde_json::to_vec(&transcript)
+        .map_err(|error| format!("could not encode Devin session: {error}"))?;
+    parse_devin_reader(std::io::Cursor::new(bytes), session_id, repo_root)
 }
 
 /// Recursively collect Devin / Cascade transcript files from a directory into candidates list.
@@ -3278,11 +3429,65 @@ pub fn resolve_devin_session(session: &str) -> Option<(String, PathBuf)> {
         }
     }
 
+    // Devin CLI stores sessions in a SQLite database.
+    for db in devin_session_db_paths() {
+        let sessions = query_devin_sessions(&db);
+        if sessions
+            .iter()
+            .any(|row| row.get("id").and_then(Value::as_str) == Some(session))
+        {
+            return Some((session.to_string(), db));
+        }
+        if sessions.iter().any(|row| {
+            row.get("id")
+                .and_then(Value::as_str)
+                .map(|id| id.starts_with(session))
+                .unwrap_or(false)
+        }) && let Some(id) = sessions
+            .iter()
+            .find(|row| {
+                row.get("id")
+                    .and_then(Value::as_str)
+                    .map(|id| id.starts_with(session))
+                    .unwrap_or(false)
+            })
+            .and_then(|row| row.get("id").and_then(Value::as_str))
+        {
+            return Some((id.to_string(), db));
+        }
+    }
+
     None
 }
 
 /// Find Devin / Cascade session log matching `repo_root`.
 pub fn find_matching_devin_log(root: &Path) -> Option<(String, PathBuf)> {
+    // Prefer Devin CLI SQLite sessions matching the repository path.
+    let mut db_sessions: Vec<(i64, String, PathBuf)> = Vec::new();
+    for db in devin_session_db_paths() {
+        for row in query_devin_sessions(&db) {
+            let Some(id) = row.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let working_directory = row
+                .get("working_directory")
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            if !devin_db_session_matches_root(working_directory, root) {
+                continue;
+            }
+            let activity = row
+                .get("last_activity_at")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            db_sessions.push((activity, id.to_string(), db.clone()));
+        }
+    }
+    db_sessions.sort_by_key(|a| std::cmp::Reverse(a.0));
+    if let Some((_, id, db)) = db_sessions.into_iter().next() {
+        return Some((id, db));
+    }
+
     let mut candidates = Vec::new();
     for dir in devin_transcripts_dirs() {
         collect_devin_transcripts(&dir, &mut candidates);
@@ -3313,6 +3518,25 @@ pub fn find_latest_devin_log(repo_root: Option<&Path>) -> Option<(String, PathBu
         && let Some(matched) = find_matching_devin_log(root)
     {
         return Some(matched);
+    }
+
+    // Fall back to the most recently active Devin CLI SQLite session.
+    let mut db_sessions: Vec<(i64, String, PathBuf)> = Vec::new();
+    for db in devin_session_db_paths() {
+        for row in query_devin_sessions(&db) {
+            let Some(id) = row.get("id").and_then(Value::as_str) else {
+                continue;
+            };
+            let activity = row
+                .get("last_activity_at")
+                .and_then(Value::as_i64)
+                .unwrap_or(0);
+            db_sessions.push((activity, id.to_string(), db.clone()));
+        }
+    }
+    db_sessions.sort_by_key(|a| std::cmp::Reverse(a.0));
+    if let Some((_, id, db)) = db_sessions.into_iter().next() {
+        return Some((id, db));
     }
 
     let mut candidates = Vec::new();
@@ -3528,6 +3752,16 @@ pub fn load_devin(
     session_id: &str,
     repo_root: Option<&Path>,
 ) -> Result<ChatMessage, String> {
+    if path
+        .extension()
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.eq_ignore_ascii_case("db"))
+        .unwrap_or(false)
+        || path.file_name().and_then(|name| name.to_str()) == Some("sessions.db")
+    {
+        return load_devin_db(path, session_id, repo_root);
+    }
+
     let file = fs::File::open(path).map_err(|error| {
         format!(
             "could not open Devin transcript {}: {error}",

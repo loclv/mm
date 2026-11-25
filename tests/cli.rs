@@ -2109,6 +2109,54 @@ fn copies_devin_log_with_devin_session() {
 }
 
 #[test]
+fn copies_devin_cli_sqlite_session() {
+    let repo = Repo::new();
+    repo.write("foo.txt", "new\n");
+    repo.git(&["add", "foo.txt"]);
+
+    let devin_dir = std::env::temp_dir().join(format!("mm-test-devin-db-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&devin_dir);
+    fs::create_dir_all(&devin_dir).unwrap();
+    let db = devin_dir.join("sessions.db");
+
+    let working_directory = repo.path().to_string_lossy().replace('\'', "''");
+    let sql = format!(
+        "CREATE TABLE sessions (id TEXT PRIMARY KEY, working_directory TEXT NOT NULL, title TEXT, last_activity_at INTEGER NOT NULL, hidden INTEGER NOT NULL DEFAULT 0);\n\
+         CREATE TABLE message_nodes (row_id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, chat_message TEXT NOT NULL);\n\
+         INSERT INTO sessions (id, working_directory, title, last_activity_at) VALUES ('devin-db-session', '{working_directory}', 'Copy from Devin database', 1);\n\
+         INSERT INTO message_nodes (session_id, chat_message) VALUES ('devin-db-session', '{{\"role\":\"user\",\"content\":\"read the devin database\"}}');\n\
+         INSERT INTO message_nodes (session_id, chat_message) VALUES ('devin-db-session', '{{\"role\":\"assistant\",\"content\":\"Loaded the Devin database.\"}}');\n"
+    );
+
+    let Ok(status) = Command::new("sqlite3").arg(&db).arg(&sql).status() else {
+        // sqlite3 is optional; skip when the CLI is not installed.
+        let _ = fs::remove_dir_all(devin_dir);
+        return;
+    };
+    if !status.success() {
+        let _ = fs::remove_dir_all(devin_dir);
+        return;
+    }
+
+    let output = repo.mm_with_env_and_remove(
+        &["--devin", "--print"],
+        &[
+            ("DEVIN_HOME", &devin_dir.to_string_lossy()),
+            ("DEVIN_SESSIONS_DB", &db.to_string_lossy()),
+        ],
+        &["DEVIN_SESSION_ID", "DEVIN_DB_PATH"],
+    );
+
+    assert!(output.status.success(), "{}", stderr(&output));
+    assert_eq!(
+        stdout(&output),
+        "Copy from Devin database\n\nLoaded the Devin database."
+    );
+
+    let _ = fs::remove_dir_all(devin_dir);
+}
+
+#[test]
 fn copies_cascade_markdown_trajectory_with_codeium_flag() {
     let repo = Repo::new();
     repo.write("foo.txt", "new\n");

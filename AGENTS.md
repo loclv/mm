@@ -74,9 +74,12 @@ Chat mode falls back to the full path-based pipeline if copying from chat fails.
     The subject uses `thread_name` from `session_index.jsonl` if available, falling back
     to the first line of the latest user prompt, falling back to the assistant message.
     The body is the text content from the last assistant message or task completion.
-  - Devin / Codeium: parses ATIF JSON transcripts, JSONL logs, or exported Markdown trajectories
-    from `~/.local/share/devin/cli/transcripts`, `~/.config/devin`, `~/.devin`, `~/.codeium/windsurf/cascade`,
-    or configured via `DEVIN_HOME` and `DEVIN_SESSION_ID`.
+  - Devin / Codeium: reads Devin CLI sessions from the SQLite database at
+    `~/.local/share/devin/cli/sessions.db` (via the `sqlite3` CLI), and parses ATIF JSON
+    transcripts, JSONL logs, or exported Markdown trajectories from
+    `~/.local/share/devin/cli/transcripts`, `~/.config/devin`, `~/.devin/transcripts`,
+    `~/.devin/sessions`, `~/.codeium/windsurf/cascade`, or configured via `DEVIN_HOME`,
+    `DEVIN_SESSION_ID`, and `DEVIN_SESSIONS_DB` / `DEVIN_DB_PATH`.
     `--devin` / `--codeium` forces Devin mode; `--devin-session` / `--codeium-session` selects a
     specific session ID or file path. Auto-detection prioritizes logs matching the repository path.
     The subject is the session title or first line of the latest user prompt, falling back to the assistant message.

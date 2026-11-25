@@ -45,7 +45,7 @@ For AI-assisted workflows, `mm --chat` copies session titles, user prompts, and 
 | **Antigravity** | `--agy`, `--antigravity`, `--agy-session <ID>` | Discovers transcripts across `~/.gemini/antigravity/brain`, `antigravity-ide`, `antigravity-cli`, or `ANTIGRAVITY_BRAIN_DIR`. Queries `conversation_summaries.db` workspace URIs and parses `transcript.jsonl`. |
 | **Claude Code** | `--claude`, `--claude-session <ID>` | Resolves project folders via encoded paths and `history.jsonl` under `~/.claude/projects/` or `CLAUDE_CONFIG_DIR`. |
 | **Codex** | `--codex`, `--codex-session <ID>` | Discovers session rollouts (`.jsonl`, `.jsonl.zst`) in `~/.codex/sessions/` or `CODEX_HOME`, matching `cwd` and `session_index.jsonl` thread names. |
-| **Devin / Cascade** | `--devin`, `--codeium`, `--devin-session <ID>` | Parses ATIF JSON, JSONL logs, or Markdown trajectories in `~/.local/share/devin/cli/transcripts`, `~/.config/devin`, or `~/.codeium/windsurf/cascade`. |
+| **Devin / Cascade** | `--devin`, `--codeium`, `--devin-session <ID>` | Reads Devin CLI SQLite sessions from `~/.local/share/devin/cli/sessions.db`, and parses ATIF JSON, JSONL logs, or Markdown trajectories in `~/.local/share/devin/cli/transcripts`, `~/.config/devin`, or `~/.codeium/windsurf/cascade`. |
 | **Freebuff / Codebuff** | `--freebuff`, `--codebuff`, `--freebuff-session <ID>` | Reads `chat-messages.json` and `chat-meta.json` from `~/.config/manicode/projects/` or repository-local `.freebuff/chats/`. |
 | **OpenCode** | `-o`, `--opencode`, `--chat-session <ID>` | Shells out to `opencode session export <id>`, prioritizing completed compaction summaries and text blocks. |
 
@@ -59,7 +59,7 @@ When working across multiple repositories simultaneously in real time, `mm` accu
 - **OpenCode**: Auto-detects matching sessions by checking OpenCode storage project configurations (`storage/project/*.json` worktrees) and CLI session lists against the repository root.
 - **Claude Code**: Matches encoded project directories (`~/.claude/projects/<encoded-path>`), `history.jsonl` project records, and recursive session transcript contents.
 - **Codex**: Matches the repository working directory in `session_meta.payload.cwd`, `session_index.jsonl` directory mappings, and deep streaming scans of `.jsonl`/`.jsonl.zst` rollouts.
-- **Devin / Cascade**: Inspects session metadata worktrees and scans recent transcripts for the repository root across ATIF JSON, JSONL logs, and Markdown trajectories.
+- **Devin / Cascade**: Matches `working_directory` in the Devin CLI SQLite session database, inspects session metadata worktrees, and scans recent transcripts for the repository root across ATIF JSON, JSONL logs, and Markdown trajectories.
 - **Freebuff / Codebuff**: Resolves repository IDs via `.freebuff/project-id` / `.codebuff/project-id`, project folder names under `~/.config/manicode/projects/`, `chat-meta.json`, and deep chat transcript scans.
 
 ### Robust Path Scoping & Matching
