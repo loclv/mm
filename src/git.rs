@@ -239,6 +239,25 @@ impl Git {
         Changes::from_buffer(buffer, cached)
     }
 
+    /// Return the raw diff text for the current changes.
+    ///
+    /// When `staged` is true the cached (index) diff is returned, otherwise the
+    /// working-tree diff. Used to recover added comment lines.
+    pub fn diff_text(&self, staged: bool) -> Result<String, String> {
+        let mut args: Vec<&str> = vec!["diff", "--no-color"];
+        if staged {
+            args.insert(1, "--cached");
+        }
+        let output = self.run(&args)?;
+        if !output.status.success() {
+            return Err(format!(
+                "`git diff` failed: {}",
+                stderr_text(&output).trim()
+            ));
+        }
+        Ok(String::from_utf8_lossy(&output.stdout).to_string())
+    }
+
     /// Use `HEAD`, or the empty tree when the repository has no commits yet.
     fn head_or_empty_tree(&self) -> Result<String, String> {
         let output = self.run(&["rev-parse", "--verify", "--quiet", "HEAD"])?;
@@ -481,6 +500,52 @@ pub fn parse_name_status_text<'a>(text: &'a str) -> Result<Vec<FileChange<'a>>, 
     Ok(changes)
 }
 
+/// Extract added comment lines from a `git diff`.
+///
+/// Only lines added in the diff (starting with `+`, excluding `+++` file
+/// headers) that are themselves comments are collected. The result is joined
+/// with newlines and truncated to 256 characters, appending `...` when it
+/// exceeds that limit.
+pub fn extract_diff_comments(diff: &str) -> String {
+    let mut comments: Vec<String> = Vec::new();
+
+    for line in diff.lines() {
+        if !line.starts_with('+') || line.starts_with("+++") {
+            continue;
+        }
+
+        let content = line[1..].trim();
+        if content.is_empty() {
+            continue;
+        }
+
+        if is_diff_comment(content) {
+            comments.push(content.to_string());
+        }
+    }
+
+    let joined = comments.join("\n");
+
+    if joined.chars().count() <= 256 {
+        joined
+    } else {
+        let mut result: String = joined.chars().take(253).collect();
+        result.push_str("...");
+        result
+    }
+}
+
+/// Whether an added diff line is a comment.
+fn is_diff_comment(line: &str) -> bool {
+    line.starts_with("//")
+        || line.starts_with('#')
+        || line.starts_with("/*")
+        || line.starts_with('*')
+        || line.starts_with("--")
+        || line.starts_with(';')
+        || line.starts_with("<!--")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -577,6 +642,22 @@ mod tests {
         let cloned = changes.clone();
         assert_eq!(cloned.files.len(), 2);
         assert_eq!(cloned.files[0].from, "src/main.rs");
+    }
+
+    #[test]
+    fn extracts_added_comments_from_diff() {
+        let diff = "--- a/foo.rs\n+++ b/foo.rs\n@@ -1,3 +1,5 @@\n // existing\n+// added comment\n+fn main() {}\n+# another comment\n";
+        let comments = extract_diff_comments(diff);
+        assert_eq!(comments, "// added comment\n# another comment");
+    }
+
+    #[test]
+    fn truncates_comments_to_256_chars() {
+        let long = "x".repeat(300);
+        let diff = format!("+// {long}\n");
+        let comments = extract_diff_comments(&diff);
+        assert_eq!(comments.chars().count(), 256);
+        assert!(comments.ends_with("..."));
     }
 
     #[test]

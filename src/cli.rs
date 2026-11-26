@@ -417,6 +417,14 @@ pub fn execute(options: &Options) -> Result<(), String> {
         return Err(NO_LINES_MSG.to_string());
     }
 
+    let diff_comments = if changes.staged {
+        git.diff_text(true)
+    } else {
+        git.diff_text(false)
+    }
+    .map(|diff| crate::git::extract_diff_comments(&diff))
+    .unwrap_or_default();
+
     let message = if options.chat {
         let chat_result = chat::load(
             options.chat_session.as_deref(),
@@ -456,7 +464,13 @@ pub fn execute(options: &Options) -> Result<(), String> {
                             chat.session_id
                         );
                     }
-                    generate_auto_message(options, &directory, &changes.files, &settings)?
+                    generate_auto_message(
+                        options,
+                        &directory,
+                        &changes.files,
+                        &settings,
+                        &diff_comments,
+                    )?
                 } else {
                     if options.verbose {
                         eprintln!(
@@ -482,11 +496,23 @@ pub fn execute(options: &Options) -> Result<(), String> {
                         "[mm] chat: failed to copy log from AI Agent ({error}); falling back to auto commit message"
                     );
                 }
-                generate_auto_message(options, &directory, &changes.files, &settings)?
+                generate_auto_message(
+                    options,
+                    &directory,
+                    &changes.files,
+                    &settings,
+                    &diff_comments,
+                )?
             }
         }
     } else {
-        generate_auto_message(options, &directory, &changes.files, &settings)?
+        generate_auto_message(
+            options,
+            &directory,
+            &changes.files,
+            &settings,
+            &diff_comments,
+        )?
     };
 
     if message.is_empty() {
@@ -516,6 +542,7 @@ fn generate_auto_message(
     directory: &Path,
     files: &[crate::git::FileChange],
     settings: &config::Config,
+    diff_comments: &str,
 ) -> Result<String, String> {
     if options.verbose {
         match &settings.source {
@@ -539,7 +566,13 @@ fn generate_auto_message(
         MessageFormat::Plain
     };
 
-    generate_msg_with_policy(files, options.message.as_deref(), &policy, format)
+    let mut message = generate_msg_with_policy(files, options.message.as_deref(), &policy, format)?;
+
+    if !diff_comments.is_empty() {
+        message = format!("{message}\n\n{diff_comments}");
+    }
+
+    Ok(message)
 }
 
 /// Read the project's commitlint configuration, reporting any warnings.
