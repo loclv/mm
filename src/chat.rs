@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use memchr::memchr2;
+use memchr::memmem;
 use serde_json::Value;
 
 /// Environment variable OpenCode sets for the current session.
@@ -375,7 +376,7 @@ fn try_match_file_url(after_scheme: &str, home: Option<&str>) -> Option<(usize, 
 /// Replace user home file URIs (`file:///Users/<user>/...`, `file:///home/<user>/...`, etc.)
 /// with `~/...` so that local user names are not leaked into commit messages.
 pub fn sanitize_file_urls(text: &str) -> String {
-    if !text.contains("file://") {
+    if memmem::find(text.as_bytes(), b"file://").is_none() {
         return text.to_string();
     }
 
@@ -391,7 +392,7 @@ pub fn sanitize_file_urls(text: &str) -> String {
     let mut result = String::with_capacity(text.len());
     let mut cursor = 0;
 
-    while let Some(rel_pos) = text[cursor..].find("file://") {
+    while let Some(rel_pos) = memmem::find(&text.as_bytes()[cursor..], b"file://") {
         let file_pos = cursor + rel_pos;
         result.push_str(&text[cursor..file_pos]);
 
@@ -419,7 +420,7 @@ fn replace_path_target(mut text: String, target: &str, replacement: &str) -> Str
 
     let target_len = target.len();
     let mut start = 0;
-    while let Some(pos) = text[start..].find(target) {
+    while let Some(pos) = memmem::find(&text.as_bytes()[start..], target.as_bytes()) {
         let abs_pos = start + pos;
         let after = abs_pos + target_len;
         let is_boundary = if after == text.len() {
