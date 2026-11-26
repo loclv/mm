@@ -16,6 +16,7 @@ use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use memchr::memchr2;
 use serde_json::Value;
 
 /// Environment variable OpenCode sets for the current session.
@@ -577,6 +578,25 @@ pub fn strip_ansi_escapes(text: &str) -> String {
     let mut i = 0;
 
     while i < bytes.len() {
+        // SIMD-accelerated scan for the next ESC or CR byte; bulk-copy the
+        // intervening plain bytes in one go.
+        match memchr2(b'\x1b', b'\r', &bytes[i..]) {
+            Some(rel) => {
+                if rel > 0 {
+                    result.extend_from_slice(&bytes[i..i + rel]);
+                }
+                i += rel;
+            }
+            None => {
+                result.extend_from_slice(&bytes[i..]);
+                break;
+            }
+        }
+
+        if i >= bytes.len() {
+            break;
+        }
+
         if bytes[i] == b'\x1b' {
             i += 1;
             if i >= bytes.len() {
@@ -652,6 +672,7 @@ pub fn strip_ansi_escapes(text: &str) -> String {
                 i += 1;
             }
         } else {
+            // Should not reach here; memchr2 guarantees ESC or CR.
             result.push(bytes[i]);
             i += 1;
         }

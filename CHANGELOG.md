@@ -1,5 +1,13 @@
 # CHANGELOG
 
+## 0.2.10 - 2026-11-25
+
+- Add Devin CLI SQLite session support (`sessions.db`) for `--devin` / `--codeium`.
+- Stop scanning `~/.devin` wholesale for transcript files.
+- Fix pre-existing clippy lint in `is_tool_marker_line`.
+- Improve performance with SIMD-accelerated byte scanning (memchr) in Git parsing and ANSI stripping.
+- Document nanobrew installation option.
+
 ## 0.2.9 - 2026-11-10
 
 - Fix release tag parsing and configure release notes from this changelog.

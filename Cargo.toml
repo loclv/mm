@@ -1,6 +1,6 @@
 [package]
 name = "mm"
-version = "0.2.9"
+version = "0.2.10"
 edition = "2024"
 description = "Generate a Conventional Commit message from Git changes and commit it"
 license = "MIT"
@@ -30,5 +30,6 @@ pkg-fmt = "tar.gz"
 pkg-fmt = "zip"
 
 [dependencies]
+memchr = "2.8.3"
 serde_json = "1.0.154"
 serde_norway = "0.9.42"

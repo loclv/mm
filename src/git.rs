@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::Arc;
 
+use memchr::memchr;
+
 /// A file change reported by `git diff-index`.
 ///
 /// In zero-copy parsing mode, `from` and `to` are borrowed `Cow::Borrowed(&'a str)`
@@ -363,12 +365,26 @@ pub fn bytes_to_cow_str<'a>(token: &'a [u8]) -> Cow<'a, str> {
 /// Every path string is borrowed directly from the input byte slice without heap allocation.
 pub fn parse_name_status_z<'a>(bytes: &'a [u8]) -> Result<Vec<FileChange<'a>>, String> {
     let mut changes = Vec::new();
-    let mut iter = bytes.split(|&b| b == 0);
+    let n = bytes.len();
+    let mut pos = 0;
 
-    while let Some(status_bytes) = iter.next() {
-        if status_bytes.is_empty() {
+    while pos < n {
+        // Locate the next NUL separator with SIMD-accelerated memchr.
+        let status_end = match memchr(b'\0', &bytes[pos..]) {
+            Some(rel) => pos + rel,
+            None => n,
+        };
+
+        if status_end == pos {
+            // Empty status token (consecutive NULs): skip.
+            pos = status_end + 1;
+            if pos > n {
+                break;
+            }
             continue;
         }
+
+        let status_bytes = &bytes[pos..status_end];
 
         // Fast extraction of status code. Git status codes are ASCII characters ('M', 'A', 'D', 'R', 'C').
         let first_byte = status_bytes[0];
@@ -382,20 +398,33 @@ pub fn parse_name_status_z<'a>(bytes: &'a [u8]) -> Result<Vec<FileChange<'a>>, S
                 .ok_or_else(|| "empty status in diff output".to_string())?
         };
 
-        // Source path token
-        let from_bytes = iter
-            .next()
-            .filter(|b| !b.is_empty())
-            .ok_or_else(|| format!("missing source path for status `{x}`"))?;
-        let from = bytes_to_cow_str(from_bytes);
+        pos = if status_end < n { status_end + 1 } else { n };
 
-        // Destination path token for renames ('R') or copies ('C')
+        // Source path token.
+        let from_end = match memchr(b'\0', &bytes[pos..]) {
+            Some(rel) => pos + rel,
+            None => n,
+        };
+        if from_end == pos {
+            return Err(format!("missing source path for status `{x}`"));
+        }
+        let from_bytes = &bytes[pos..from_end];
+        let from = bytes_to_cow_str(from_bytes);
+        pos = if from_end < n { from_end + 1 } else { n };
+
+        // Destination path token for renames ('R') or copies ('C').
         let to = if x == 'R' || x == 'C' {
-            let to_bytes = iter
-                .next()
-                .filter(|b| !b.is_empty())
-                .ok_or_else(|| format!("missing destination path for status `{x}`"))?;
-            bytes_to_cow_str(to_bytes)
+            let to_end = match memchr(b'\0', &bytes[pos..]) {
+                Some(rel) => pos + rel,
+                None => n,
+            };
+            if to_end == pos {
+                return Err(format!("missing destination path for status `{x}`"));
+            }
+            let to_bytes = &bytes[pos..to_end];
+            let value = bytes_to_cow_str(to_bytes);
+            pos = if to_end < n { to_end + 1 } else { n };
+            value
         } else {
             Cow::Borrowed("")
         };

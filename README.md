@@ -62,11 +62,13 @@ Support for ...
 
 ## Install
 
-### Homebrew (macOS & Linux)
+### Homebrew / nanobrew (macOS & Linux)
 
 ```sh
 brew tap loclv/tap
 brew install mm
+# or with nanobrew - <https://github.com/justrach/nanobrew>
+nb install loclv/tap/mm
 ```
 
 ### cargo-binstall (Pre-built Binaries)
