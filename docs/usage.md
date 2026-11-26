@@ -24,7 +24,7 @@ brew install mm
 ### Option B: cargo-binstall (Pre-built Binaries)
 
 ```sh
-cargo binstall mm
+cargo binstall --git https://github.com/loclv/mm mm
 ```
 
 ### Option C: From Source via Cargo

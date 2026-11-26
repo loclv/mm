@@ -30,7 +30,7 @@ brew upgrade mm
 [`cargo-binstall`](https://github.com/cargo-bins/cargo-binstall) fetches pre-compiled binaries directly from GitHub Releases without requiring a local Rust compilation toolchain:
 
 ```sh
-cargo binstall mm
+cargo binstall --git https://github.com/loclv/mm mm
 ```
 
 ### 3. Pre-compiled Binaries (GitHub Releases)
@@ -103,6 +103,7 @@ git push origin release-v0.2.3
 ### Homebrew Tap Setup
 
 To enable automated formula updates when a new release is cut:
+
 1. Create a GitHub Personal Access Token (PAT) with `repo` or `Contents: write` permissions for your tap repository.
 2. In the `loclv/mm` GitHub repository settings, go to **Settings > Secrets and variables > Actions**.
 3. Add secret `HOMEBREW_TAP_TOKEN`.

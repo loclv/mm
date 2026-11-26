@@ -76,7 +76,7 @@ nb install loclv/tap/mm
 Install pre-compiled binaries fast without building from source:
 
 ```sh
-cargo binstall mm
+cargo binstall --git https://github.com/loclv/mm mm
 ```
 
 ### Pre-compiled Binaries (GitHub Releases)
